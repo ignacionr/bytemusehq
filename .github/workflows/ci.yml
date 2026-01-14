@@ -29,7 +29,7 @@ jobs:
         path: |
           wxwidgets-source
           wxwidgets-install
-        key: wxwidgets-${{ env.WXVERSION }}-msvc-static-${{ runner.os }}
+        key: wxwidgets-${{ env.WXVERSION }}-msvc-static-mono-${{ runner.os }}
     
     - name: Setup wxWidgets
       run: |

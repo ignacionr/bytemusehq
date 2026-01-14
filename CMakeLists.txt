@@ -28,6 +28,11 @@ set(HEADERS
 # Create executable
 add_executable(${PROJECT_NAME} WIN32 ${SOURCES} ${HEADERS})
 
+# Set compile definitions for static linking
+if(WIN32)
+  target_compile_definitions(${PROJECT_NAME} PRIVATE WXUSINGDLL=0)
+endif()
+
 # Link wxWidgets libraries
 target_link_libraries(${PROJECT_NAME} ${wxWidgets_LIBRARIES})
 
