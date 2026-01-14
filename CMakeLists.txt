@@ -41,14 +41,9 @@ if(WIN32)
   set(CPACK_NSIS_INSTALL_ROOT "C:/Program Files")
 
 
-  # Try to find wxWidgets DLLs in the build output directory
-  set(WX_BUILD_DLL_DIR "${CMAKE_SOURCE_DIR}/wxwidgets-source/build/lib/vc_x64_dll")
-  install(FILES
-    "${WX_BUILD_DLL_DIR}/wxmsw32u_core_vc_x64.dll"
-    "${WX_BUILD_DLL_DIR}/wxmsw32u_base_vc_x64.dll"
-    "${WX_BUILD_DLL_DIR}/wxmsw32u_stc_vc_x64.dll"
-    DESTINATION bin
-  )
+  # Bundle all wxWidgets DLLs from the build output directory
+  file(GLOB WX_DLLS "${CMAKE_SOURCE_DIR}/wxwidgets-source/build/lib/vc_x64_dll/*.dll")
+  install(FILES ${WX_DLLS} DESTINATION bin)
 
   include(CPack)
 endif()
