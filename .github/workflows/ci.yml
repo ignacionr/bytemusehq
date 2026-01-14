@@ -75,7 +75,9 @@ jobs:
     
     - name: Check executable dependencies
       run: |
-        dumpbin /dependents build\Release\bytemusehq.exe
+        for /f "delims=" %%A in ('dir /b "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC"') do (
+          "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\%%A\bin\Hostx64\x64\dumpbin.exe" /dependents build\Release\bytemusehq.exe
+        )
       shell: cmd
     
     - name: Create installer
