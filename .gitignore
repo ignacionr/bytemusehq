@@ -1,0 +1,42 @@
+# CMake
+build/
+cmake_install.cmake
+CMakeCache.txt
+CMakeFiles/
+CMakeUserPresets.json
+
+# Build artifacts
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+*.out
+
+# IDE and editor
+.vscode/settings.json
+.vscode/launch.json
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+.clangd
+compile_commands.json
+
+# Nix
+result
+result-*
+.dirlocals
+
+# Dependencies
+node_modules/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+*.user
+*.qbs.user
