@@ -51,7 +51,11 @@ jobs:
         echo "=== wxWidgets lib directory ==="
         dir "${{ github.workspace }}\wxwidgets-install\lib"
         echo "=== wxWidgets bin directory ==="
-        dir "${{ github.workspace }}\wxwidgets-install\bin" 2>&1 || echo "No bin directory"
+        if (Test-Path "${{ github.workspace }}\wxwidgets-install\bin") {
+          dir "${{ github.workspace }}\wxwidgets-install\bin"
+        } else {
+          echo "No bin directory found"
+        }
       shell: powershell
     
     - name: Configure bytemusehq
