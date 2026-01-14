@@ -1,0 +1,64 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "nix: configure",
+			"type": "shell",
+			"command": "nix develop -c cmake -B build -S .",
+			"group": {
+				"kind": "build",
+				"isDefault": false
+			},
+			"presentation": {
+				"reveal": "always",
+				"panel": "shared"
+			},
+			"problemMatcher": [
+				"$gcc"
+			]
+		},
+		{
+			"label": "nix: build",
+			"type": "shell",
+			"command": "nix develop -c cmake --build build",
+			"group": {
+				"kind": "build",
+				"isDefault": true
+			},
+			"presentation": {
+				"reveal": "always",
+				"panel": "shared"
+			},
+			"problemMatcher": [
+				"$gcc"
+			],
+			"dependsOn": [
+				"nix: configure"
+			]
+		},
+		{
+			"label": "nix: clean",
+			"type": "shell",
+			"command": "nix develop -c bash -c 'rm -rf build'",
+			"group": "build",
+			"presentation": {
+				"reveal": "always",
+				"panel": "shared"
+			}
+		},
+		{
+			"label": "nix: run",
+			"type": "shell",
+			"command": "nix develop -c bash -c './build/bytemusehq'",
+			"group": "test",
+			"presentation": {
+				"reveal": "always",
+				"panel": "shared"
+			},
+			"dependsOn": [
+				"nix: build"
+			],
+			"isBackground": true
+		}
+	]
+}
