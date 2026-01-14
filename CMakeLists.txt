@@ -11,7 +11,8 @@ endif()
 
 # Find wxWidgets (static linking)
 set(wxWidgets_USE_STATIC ON)
-find_package(wxWidgets REQUIRED core base stc)
+set(wxWidgets_USE_MONOLITHIC ON)
+find_package(wxWidgets REQUIRED)
 include(${wxWidgets_USE_FILE})
 
 # Source files
