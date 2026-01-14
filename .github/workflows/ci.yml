@@ -96,6 +96,7 @@ jobs:
         files: |
           build/Release/bytemusehq.exe
           build/ByteMuse*.exe
+          wxwidgets-install/bin/*.dll
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
