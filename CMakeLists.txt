@@ -40,11 +40,13 @@ if(WIN32)
   set(CPACK_NSIS_MUI_ICON "${CMAKE_CURRENT_SOURCE_DIR}/icon.ico")
   set(CPACK_NSIS_INSTALL_ROOT "C:/Program Files")
 
-  # Install wxWidgets DLLs
+
+  # Try to find wxWidgets DLLs in the build output directory
+  set(WX_BUILD_DLL_DIR "${CMAKE_SOURCE_DIR}/wxwidgets-source/build/lib/vc_x64_dll")
   install(FILES
-    "${wxWidgets_LIB_DIR}/../wxmsw32u_core_vc_x64.dll"
-    "${wxWidgets_LIB_DIR}/../wxmsw32u_base_vc_x64.dll"
-    "${wxWidgets_LIB_DIR}/../wxmsw32u_stc_vc_x64.dll"
+    "${WX_BUILD_DLL_DIR}/wxmsw32u_core_vc_x64.dll"
+    "${WX_BUILD_DLL_DIR}/wxmsw32u_base_vc_x64.dll"
+    "${WX_BUILD_DLL_DIR}/wxmsw32u_stc_vc_x64.dll"
     DESTINATION bin
   )
 
