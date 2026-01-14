@@ -30,8 +30,6 @@ jobs:
           wxwidgets-source
           wxwidgets-install
         key: wxwidgets-${{ env.WXVERSION }}-msvc-static-${{ runner.os }}
-        restore-keys: |
-          wxwidgets-${{ env.WXVERSION }}-msvc-
     
     - name: Setup wxWidgets
       run: |
