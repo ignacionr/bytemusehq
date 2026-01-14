@@ -68,6 +68,20 @@ jobs:
         cd build
         cpack -C Release
       shell: cmd
+
+    - name: Upload NSISOutput.log for debugging
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: NSISOutput-log
+        path: build/_CPack_Packages/win64/NSIS/NSISOutput.log
+
+    - name: Upload NSIS project.nsi for debugging
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: NSIS-project-nsi
+        path: build/_CPack_Packages/win64/NSIS/project.nsi
     
     - name: Upload Windows executable
       uses: actions/upload-artifact@v4
