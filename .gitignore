@@ -15,9 +15,6 @@ CMakeUserPresets.json
 *.out
 
 # IDE and editor
-.vscode/settings.json
-.vscode/launch.json
-.idea/
 *.swp
 *.swo
 *~
