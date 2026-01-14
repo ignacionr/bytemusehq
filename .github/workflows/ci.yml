@@ -1,10 +1,13 @@
-name: CI Build Windows Executable
+name: CI Build
 
 on:
   push:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+
+env:
+  WXVERSION: 3.2.8
 
 jobs:
   build-windows:
@@ -13,31 +16,41 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     
-    - name: Install CMake
-      run: choco install cmake -y
+    - name: Cache wxWidgets
+      uses: actions/cache@v4
+      with:
+        path: wxwidgets-source
+        key: wxwidgets-${{ env.WXVERSION }}-msvc-${{ runner.os }}
+        restore-keys: |
+          wxwidgets-${{ env.WXVERSION }}-msvc-
+    
+    - name: Setup wxWidgets
+      run: |
+        if (Test-Path wxwidgets-source) {
+          echo "wxWidgets already cached"
+        } else {
+          curl "https://github.com/wxWidgets/wxWidgets/releases/download/v${{ env.WXVERSION }}/wxWidgets-${{ env.WXVERSION }}.7z" -L --output wxWidgets.7z
+          7z x "wxWidgets.7z" "-owxwidgets-source" -y
+          cd "wxwidgets-source"
+          mkdir build
+          cd build
+          cmake ..
+          cmake --build . --config Release
+          cd ../..
+        }
       shell: powershell
     
-    - name: Clone vcpkg
-      run: |
-        git clone https://github.com/Microsoft/vcpkg.git
-        cd vcpkg
-        .\bootstrap-vcpkg.bat
-      shell: cmd
-    
-    - name: Install wxWidgets with vcpkg
-      run: |
-        cd vcpkg
-        .\vcpkg install wxwidgets:x64-windows
-      shell: cmd
-    
-    - name: Configure CMake with vcpkg
+    - name: Configure bytemusehq
       run: |
         mkdir build
         cd build
-        cmake -G "Visual Studio 17 2022" -A x64 -DCMAKE_TOOLCHAIN_FILE="%CD%\..\vcpkg\scripts\buildsystems\vcpkg.cmake" ..
-      shell: cmd
+        cmake -G "Visual Studio 17 2022" -A x64 `
+               -DwxWidgets_ROOT_DIR="../wxwidgets-source" `
+               -DwxWidgets_LIB_DIR="../wxwidgets-source/build/lib/Release" `
+               -DCMAKE_BUILD_TYPE=Release ..
+      shell: powershell
     
-    - name: Build
+    - name: Build bytemusehq
       run: |
         cd build
         cmake --build . --config Release
