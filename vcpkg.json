@@ -1,0 +1,10 @@
+{
+  "name": "bytemusehq",
+  "version": "0.1.0",
+  "dependencies": [
+    {
+      "name": "wxwidgets",
+      "version>=": "3.2.0"
+    }
+  ]
+}
