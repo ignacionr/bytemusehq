@@ -4,7 +4,8 @@ project(bytemusehq)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Find wxWidgets
+# Find wxWidgets (static linking)
+set(wxWidgets_USE_STATIC ON)
 find_package(wxWidgets REQUIRED core base stc)
 include(${wxWidgets_USE_FILE})
 
@@ -38,11 +39,6 @@ if(WIN32)
   set(CPACK_PACKAGE_VERSION "1.0.0")
   set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "wxWidgets Text Editor")
   set(CPACK_NSIS_INSTALL_ROOT "C:/Program Files")
-
-
-  # Bundle all wxWidgets DLLs from the build output directory
-  file(GLOB WX_DLLS "${CMAKE_SOURCE_DIR}/wxwidgets-source/build/lib/vc_x64_dll/*.dll")
-  install(FILES ${WX_DLLS} DESTINATION bin)
 
   include(CPack)
 endif()
