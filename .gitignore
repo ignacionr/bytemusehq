@@ -21,6 +21,12 @@ CMakeUserPresets.json
 .DS_Store
 .clangd
 compile_commands.json
+# But allow VS Code config files
+!.vscode/
+!.vscode/settings.json
+!.vscode/c_cpp_properties.json
+!.vscode/launch.json
+!.vscode/tasks.json
 
 # Nix
 result
