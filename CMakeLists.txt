@@ -26,3 +26,6 @@ target_link_libraries(${PROJECT_NAME} ${wxWidgets_LIBRARIES})
 
 # Include directories
 target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+# Install rules
+install(TARGETS ${PROJECT_NAME} DESTINATION bin)
