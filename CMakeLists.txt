@@ -39,12 +39,14 @@ if(WIN32)
   set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "wxWidgets Text Editor")
   set(CPACK_NSIS_MUI_ICON "${CMAKE_CURRENT_SOURCE_DIR}/icon.ico")
   set(CPACK_NSIS_INSTALL_ROOT "C:\\Program Files")
-  
-  # Get wxWidgets DLLs
-  get_filename_component(WX_LIB_DIR "${wxWidgets_LIB_DIR}" DIRECTORY)
-  install(GLOB DESTINATION bin "${WX_LIB_DIR}/wxmsw32u_core_vc_x64.dll")
-  install(GLOB DESTINATION bin "${WX_LIB_DIR}/wxmsw32u_base_vc_x64.dll")
-  install(GLOB DESTINATION bin "${WX_LIB_DIR}/wxmsw32u_stc_vc_x64.dll")
-  
+
+  # Install wxWidgets DLLs
+  install(FILES
+    "${wxWidgets_LIB_DIR}/../wxmsw32u_core_vc_x64.dll"
+    "${wxWidgets_LIB_DIR}/../wxmsw32u_base_vc_x64.dll"
+    "${wxWidgets_LIB_DIR}/../wxmsw32u_stc_vc_x64.dll"
+    DESTINATION bin
+  )
+
   include(CPack)
 endif()
