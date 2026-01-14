@@ -19,7 +19,9 @@ jobs:
     - name: Cache wxWidgets
       uses: actions/cache@v4
       with:
-        path: wxwidgets-source
+        path: |
+          wxwidgets-source
+          wxwidgets-install
         key: wxwidgets-${{ env.WXVERSION }}-msvc-${{ runner.os }}
         restore-keys: |
           wxwidgets-${{ env.WXVERSION }}-msvc-
@@ -32,8 +34,9 @@ jobs:
           curl.exe -L "https://github.com/wxWidgets/wxWidgets/releases/download/v${{ env.WXVERSION }}/wxWidgets-${{ env.WXVERSION }}.7z" -o wxWidgets.7z
           7z x "wxWidgets.7z" "-owxwidgets-source" -y
           cd "wxwidgets-source"
-          cmake -B build -S . -G "Visual Studio 17 2022" -A x64
+          cmake -B build -S . -G "Visual Studio 17 2022" -A x64 -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}\wxwidgets-install"
           cmake --build build --config Release --parallel 4
+          cmake --install build --config Release
           cd ..
         }
       shell: powershell
@@ -43,7 +46,7 @@ jobs:
         mkdir build
         cd build
         cmake -G "Visual Studio 17 2022" -A x64 `
-               -DwxWidgets_ROOT_DIR="${{ github.workspace }}\wxwidgets-source" `
+               -DwxWidgets_ROOT_DIR="${{ github.workspace }}\wxwidgets-install" `
                -DCMAKE_BUILD_TYPE=Release ..
       shell: powershell
     
