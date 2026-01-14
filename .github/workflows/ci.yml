@@ -60,17 +60,27 @@ jobs:
         cmake --build . --config Release
       shell: cmd
     
+    - name: Create installer
+      run: |
+        cd build
+        cpack -C Release
+      shell: cmd
+    
     - name: Upload Windows executable
       uses: actions/upload-artifact@v4
       with:
         name: bytemusehq-windows
-        path: build/Release/bytemusehq.exe
+        path: |
+          build/Release/bytemusehq.exe
+          build/ByteMuse*.exe
     
     - name: Create Release
       if: startsWith(github.ref, 'refs/tags/')
       uses: softprops/action-gh-release@v2
       with:
-        files: build/Release/bytemusehq.exe
+        files: |
+          build/Release/bytemusehq.exe
+          build/ByteMuse*.exe
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

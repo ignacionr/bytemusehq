@@ -29,3 +29,22 @@ target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/s
 
 # Install rules
 install(TARGETS ${PROJECT_NAME} DESTINATION bin)
+
+# CPack configuration for Windows installer
+if(WIN32)
+  set(CPACK_GENERATOR NSIS)
+  set(CPACK_PACKAGE_NAME "ByteMuse HQ")
+  set(CPACK_PACKAGE_VENDOR "ByteMuse")
+  set(CPACK_PACKAGE_VERSION "1.0.0")
+  set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "wxWidgets Text Editor")
+  set(CPACK_NSIS_MUI_ICON "${CMAKE_CURRENT_SOURCE_DIR}/icon.ico")
+  set(CPACK_NSIS_INSTALL_ROOT "C:\\Program Files")
+  
+  # Get wxWidgets DLLs
+  get_filename_component(WX_LIB_DIR "${wxWidgets_LIB_DIR}" DIRECTORY)
+  install(GLOB DESTINATION bin "${WX_LIB_DIR}/wxmsw32u_core_vc_x64.dll")
+  install(GLOB DESTINATION bin "${WX_LIB_DIR}/wxmsw32u_base_vc_x64.dll")
+  install(GLOB DESTINATION bin "${WX_LIB_DIR}/wxmsw32u_stc_vc_x64.dll")
+  
+  include(CPack)
+endif()
