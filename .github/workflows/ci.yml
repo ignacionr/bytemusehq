@@ -29,7 +29,7 @@ jobs:
         if (Test-Path wxwidgets-source) {
           echo "wxWidgets already cached"
         } else {
-          curl "https://github.com/wxWidgets/wxWidgets/releases/download/v${{ env.WXVERSION }}/wxWidgets-${{ env.WXVERSION }}.7z" -L --output wxWidgets.7z
+          curl.exe -L "https://github.com/wxWidgets/wxWidgets/releases/download/v${{ env.WXVERSION }}/wxWidgets-${{ env.WXVERSION }}.7z" -o wxWidgets.7z
           7z x "wxWidgets.7z" "-owxwidgets-source" -y
           cd "wxwidgets-source"
           mkdir build
