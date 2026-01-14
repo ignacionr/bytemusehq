@@ -46,6 +46,14 @@ jobs:
         }
       shell: powershell
     
+    - name: Check wxWidgets installation
+      run: |
+        echo "=== wxWidgets lib directory ==="
+        dir "${{ github.workspace }}\wxwidgets-install\lib"
+        echo "=== wxWidgets bin directory ==="
+        dir "${{ github.workspace }}\wxwidgets-install\bin" 2>&1 || echo "No bin directory"
+      shell: powershell
+    
     - name: Configure bytemusehq
       run: |
         mkdir build
@@ -59,6 +67,11 @@ jobs:
       run: |
         cd build
         cmake --build . --config Release
+      shell: cmd
+    
+    - name: Check executable dependencies
+      run: |
+        dumpbin /dependents build\Release\bytemusehq.exe
       shell: cmd
     
     - name: Create installer

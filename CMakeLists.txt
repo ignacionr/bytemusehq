@@ -4,6 +4,11 @@ project(bytemusehq)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Force static linking on Windows
+if(WIN32)
+  set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
 # Find wxWidgets (static linking)
 set(wxWidgets_USE_STATIC ON)
 find_package(wxWidgets REQUIRED core base stc)
