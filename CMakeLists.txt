@@ -9,10 +9,9 @@ if(WIN32)
   set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
-# Find wxWidgets (static linking)
+# Find wxWidgets with static linking
 set(wxWidgets_USE_STATIC ON)
-set(wxWidgets_USE_MONOLITHIC ON)
-find_package(wxWidgets REQUIRED)
+find_package(wxWidgets REQUIRED core base stc)
 include(${wxWidgets_USE_FILE})
 
 # Source files
@@ -35,6 +34,15 @@ endif()
 
 # Link wxWidgets libraries
 target_link_libraries(${PROJECT_NAME} ${wxWidgets_LIBRARIES})
+
+# When using static wxWidgets, link required Windows system libraries
+if(WIN32 AND NOT SHARED)
+  target_link_libraries(${PROJECT_NAME}
+    advapi32 comctl32 comdlg32 gdi32 gdiplus imm32 kernel32 msimg32
+    ole32 oleacc oleaut32 opengl32 rpcrt4 shell32 shlwapi user32 uuid
+    uxtheme version wininet winmm winspool ws2_32 wxlexilla wxscintilla
+  )
+endif()
 
 # Include directories
 target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
