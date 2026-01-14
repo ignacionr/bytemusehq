@@ -32,11 +32,9 @@ jobs:
           curl.exe -L "https://github.com/wxWidgets/wxWidgets/releases/download/v${{ env.WXVERSION }}/wxWidgets-${{ env.WXVERSION }}.7z" -o wxWidgets.7z
           7z x "wxWidgets.7z" "-owxwidgets-source" -y
           cd "wxwidgets-source"
-          mkdir build
-          cd build
-          cmake ..
-          cmake --build . --config Release
-          cd ../..
+          cmake -B build -S .
+          cmake --build build --config Release
+          cd ..
         }
       shell: powershell
     
