@@ -18,6 +18,9 @@ jobs:
       contents: write
     
     steps:
+    - name: Install NSIS
+      run: choco install nsis -y
+      shell: powershell
     - uses: actions/checkout@v4
     
     - name: Cache wxWidgets

@@ -38,7 +38,7 @@ if(WIN32)
   set(CPACK_PACKAGE_VERSION "1.0.0")
   set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "wxWidgets Text Editor")
   set(CPACK_NSIS_MUI_ICON "${CMAKE_CURRENT_SOURCE_DIR}/icon.ico")
-  set(CPACK_NSIS_INSTALL_ROOT "C:\\Program Files")
+  set(CPACK_NSIS_INSTALL_ROOT "C:/Program Files")
 
   # Install wxWidgets DLLs
   install(FILES
