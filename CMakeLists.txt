@@ -36,11 +36,11 @@ endif()
 target_link_libraries(${PROJECT_NAME} ${wxWidgets_LIBRARIES})
 
 # When using static wxWidgets, link required Windows system libraries
-if(WIN32 AND NOT SHARED)
+if(WIN32)
   target_link_libraries(${PROJECT_NAME}
     advapi32 comctl32 comdlg32 gdi32 gdiplus imm32 kernel32 msimg32
     ole32 oleacc oleaut32 opengl32 rpcrt4 shell32 shlwapi user32 uuid
-    uxtheme version wininet winmm winspool ws2_32 wxlexilla wxscintilla
+    uxtheme version wininet winmm winspool ws2_32
   )
 endif()
 
