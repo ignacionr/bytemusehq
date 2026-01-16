@@ -4,7 +4,7 @@
 class ByteMuseApp : public wxApp {
 public:
     bool OnInit() override {
-        MainFrame* frame = new MainFrame();
+        auto frame = new MainFrame();
         frame->Show();
         return true;
     }

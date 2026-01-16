@@ -2,7 +2,7 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Run (nix)",
+      "name": "Debug (nix)",
       "type": "lldb",
       "request": "launch",
       "program": "${workspaceFolder}/build/bytemusehq",
@@ -10,7 +10,44 @@
       "cwd": "${workspaceFolder}",
       "preLaunchTask": "nix: build",
       "stopOnEntry": false,
-      "console": "integratedTerminal"
+      "terminal": "integrated",
+      "env": {},
+      "sourceMap": {
+        ".": "${workspaceFolder}"
+      },
+      "initCommands": [
+        "settings set target.load-cwd-lldbinit true"
+      ]
+    },
+    {
+      "name": "Debug (nix) - Stop on Entry",
+      "type": "lldb",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/bytemusehq",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "nix: build",
+      "stopOnEntry": true,
+      "terminal": "integrated",
+      "env": {},
+      "sourceMap": {
+        ".": "${workspaceFolder}"
+      }
+    },
+    {
+      "name": "Attach to Process",
+      "type": "lldb",
+      "request": "attach",
+      "program": "${workspaceFolder}/build/bytemusehq",
+      "pid": "${command:pickProcess}",
+      "waitFor": false
+    },
+    {
+      "name": "Attach by Name",
+      "type": "lldb",
+      "request": "attach",
+      "program": "${workspaceFolder}/build/bytemusehq",
+      "waitFor": true
     }
   ]
 }

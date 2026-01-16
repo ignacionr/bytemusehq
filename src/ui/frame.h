@@ -2,8 +2,8 @@
 #define FRAME_H
 
 #include <wx/wx.h>
-#include <wx/stc/stc.h>
 #include <wx/treectrl.h>
+#include "editor.h"
 #include "../commands/command.h"
 
 // Custom tree item data to store file paths
@@ -21,17 +21,19 @@ public:
     MainFrame();
 
     // Get the editor component (for commands)
-    wxStyledTextCtrl* GetEditor() { return m_editor; }
+    Editor* GetEditor() { return m_editor; }
+    wxStyledTextCtrl* GetTextCtrl() { return m_editor ? m_editor->GetTextCtrl() : nullptr; }
 
 private:
     wxTreeCtrl* m_treeCtrl;
-    wxStyledTextCtrl* m_editor;
-    wxString m_currentFilePath;
+    Editor* m_editor;
     
     void SetupUI();
+    void SetupMenuBar();
     void SetupAccelerators();
     void RegisterCommands();
     void PopulateTree(const wxString& path, wxTreeItemId parentItem);
+    void UpdateTitle();
     
     // Command palette
     void ShowCommandPalette();
@@ -42,6 +44,11 @@ private:
     void OnTreeItemCollapsing(wxTreeEvent& event);
     void OnTreeItemExpanding(wxTreeEvent& event);
     void OnCommandPalette(wxCommandEvent& event);
+    void OnNewFile(wxCommandEvent& event);
+    void OnOpenFile(wxCommandEvent& event);
+    void OnSave(wxCommandEvent& event);
+    void OnSaveAs(wxCommandEvent& event);
+    void OnClose(wxCloseEvent& event);
     
     wxDECLARE_EVENT_TABLE();
 };

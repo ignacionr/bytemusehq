@@ -18,11 +18,13 @@ include(${wxWidgets_USE_FILE})
 set(SOURCES
     src/main.cpp
     src/ui/frame.cpp
+    src/ui/editor.cpp
     src/commands/command_palette.cpp
 )
 
 set(HEADERS
     src/ui/frame.h
+    src/ui/editor.h
     src/commands/command.h
     src/commands/command_registry.h
     src/commands/command_palette.h

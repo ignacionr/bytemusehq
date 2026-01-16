@@ -1,0 +1,15 @@
+{
+  "recommendations": [
+    // C/C++ language support and IntelliSense
+    "ms-vscode.cpptools",
+    // LLDB debugger for macOS (uses Xcode's LLDB)
+    "vadimcn.vscode-lldb",
+    // CMake language support
+    "twxs.cmake",
+    // CMake Tools for build/configure integration
+    "ms-vscode.cmake-tools",
+    // Nix language support (for flake.nix, default.nix)
+    "jnoortheen.nix-ide"
+  ],
+  "unwantedRecommendations": []
+}
