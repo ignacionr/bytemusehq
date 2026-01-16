@@ -3,17 +3,27 @@
 #include <wx/dir.h>
 #include <wx/file.h>
 #include <wx/splitter.h>
+#include "../commands/command_registry.h"
+#include "../commands/command_palette.h"
+#include "../commands/builtin_commands.h"
+
+enum {
+    ID_COMMAND_PALETTE = wxID_HIGHEST + 1
+};
 
 wxBEGIN_EVENT_TABLE(MainFrame, wxFrame)
     EVT_TREE_ITEM_ACTIVATED(wxID_ANY, MainFrame::OnTreeItemActivated)
     EVT_TREE_ITEM_COLLAPSING(wxID_ANY, MainFrame::OnTreeItemCollapsing)
     EVT_TREE_ITEM_EXPANDING(wxID_ANY, MainFrame::OnTreeItemExpanding)
+    EVT_MENU(ID_COMMAND_PALETTE, MainFrame::OnCommandPalette)
 wxEND_EVENT_TABLE()
 
 MainFrame::MainFrame()
     : wxFrame(nullptr, wxID_ANY, "ByteMuseHQ", wxDefaultPosition, wxSize(1000, 600))
 {
+    RegisterCommands();
     SetupUI();
+    SetupAccelerators();
 }
 
 void MainFrame::SetupUI()
@@ -150,4 +160,49 @@ void MainFrame::OnTreeItemExpanding(wxTreeEvent& event)
             }
         }
     }
+}
+
+void MainFrame::RegisterCommands()
+{
+    // Register all built-in commands
+    BuiltinCommands::RegisterAll();
+}
+
+void MainFrame::SetupAccelerators()
+{
+    // Set up keyboard shortcut for command palette (Ctrl+Shift+P)
+    wxAcceleratorEntry entries[1];
+    entries[0].Set(wxACCEL_CTRL | wxACCEL_SHIFT, 'P', ID_COMMAND_PALETTE);
+    wxAcceleratorTable accel(1, entries);
+    SetAcceleratorTable(accel);
+}
+
+CommandContext MainFrame::CreateCommandContext()
+{
+    CommandContext ctx;
+    ctx.Set<wxWindow>("window", this);
+    ctx.Set<wxStyledTextCtrl>("editor", m_editor);
+    ctx.Set<wxString>("currentFile", &m_currentFilePath);
+    return ctx;
+}
+
+void MainFrame::ShowCommandPalette()
+{
+    CommandContext ctx = CreateCommandContext();
+    CommandPalette palette(this, ctx);
+    
+    if (palette.ShowModal() == wxID_OK) {
+        auto cmd = palette.GetSelectedCommand();
+        if (cmd) {
+            // Don't recursively open command palette
+            if (cmd->GetId() != "app.commandPalette") {
+                cmd->Execute(ctx);
+            }
+        }
+    }
+}
+
+void MainFrame::OnCommandPalette(wxCommandEvent& event)
+{
+    ShowCommandPalette();
 }

@@ -18,10 +18,15 @@ include(${wxWidgets_USE_FILE})
 set(SOURCES
     src/main.cpp
     src/ui/frame.cpp
+    src/commands/command_palette.cpp
 )
 
 set(HEADERS
     src/ui/frame.h
+    src/commands/command.h
+    src/commands/command_registry.h
+    src/commands/command_palette.h
+    src/commands/builtin_commands.h
 )
 
 # Create executable
