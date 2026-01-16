@@ -27,16 +27,14 @@ set(HEADERS
 # Create executable
 add_executable(${PROJECT_NAME} WIN32 ${SOURCES} ${HEADERS})
 
-# Set compile definitions for static linking
-if(WIN32)
-  target_compile_definitions(${PROJECT_NAME} PRIVATE WXUSINGDLL=0)
-endif()
-
 # Link wxWidgets libraries
 target_link_libraries(${PROJECT_NAME} ${wxWidgets_LIBRARIES})
 
-# When using static wxWidgets, link required Windows system libraries
-if(WIN32)
+# Set static linking options for Windows
+if(WIN32 AND MSVC)
+  # Use static runtime library
+  set_property(TARGET ${PROJECT_NAME} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+  # Link statically with Windows system libraries
   target_link_libraries(${PROJECT_NAME}
     advapi32 comctl32 comdlg32 gdi32 gdiplus imm32 kernel32 msimg32
     ole32 oleacc oleaut32 opengl32 rpcrt4 shell32 shlwapi user32 uuid

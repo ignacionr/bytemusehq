@@ -85,39 +85,19 @@ jobs:
         )
       shell: cmd
     
-    - name: Create installer
+    - name: Create package
       run: |
         cd build
         cpack -C Release
       shell: cmd
 
-    - name: Upload NSISOutput.log for debugging
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: NSISOutput-log
-        path: build/_CPack_Packages/win64/NSIS/NSISOutput.log
-
-    - name: Upload NSIS project.nsi for debugging
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: NSIS-project-nsi
-        path: build/_CPack_Packages/win64/NSIS/project.nsi
-    
     - name: Upload Windows executable
       uses: actions/upload-artifact@v4
       with:
         name: bytemusehq-windows
         path: |
           build/Release/bytemusehq.exe
-          build/ByteMuse*.exe
-    
-    - name: Copy DLLs for release
-      if: startsWith(github.ref, 'refs/tags/')
-      run: |
-        Copy-Item "${{ github.workspace }}\wxwidgets-install\bin\*.dll" -Destination "${{ github.workspace }}\build\Release\"
-      shell: powershell
+          build/ByteMuse*.zip
     
     - name: Create Release
       if: startsWith(github.ref, 'refs/tags/')
@@ -125,8 +105,7 @@ jobs:
       with:
         files: |
           build/Release/bytemusehq.exe
-          build/Release/*.dll
-          build/ByteMuse*.exe
+          build/ByteMuse*.zip
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
