@@ -237,6 +237,7 @@ CommandContext MainFrame::CreateCommandContext()
 {
     CommandContext ctx;
     ctx.Set<wxWindow>("window", this);
+    ctx.Set<MainFrame>("mainFrame", this);
     ctx.Set<wxStyledTextCtrl>("editor", m_editor->GetTextCtrl());
     ctx.Set<Editor>("editorComponent", m_editor);
     ctx.Set<Terminal>("terminal", m_terminal);

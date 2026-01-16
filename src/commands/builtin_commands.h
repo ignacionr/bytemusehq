@@ -3,11 +3,15 @@
 
 #include "command.h"
 #include "command_registry.h"
+#include "../ui/terminal.h"
 #include <wx/stc/stc.h>
 #include <wx/filedlg.h>
 #include <wx/msgdlg.h>
 #include <wx/textdlg.h>
 #include <wx/aboutdlg.h>
+
+// Forward declaration to avoid circular include
+class MainFrame;
 
 /**
  * Factory for creating built-in commands.
@@ -308,6 +312,71 @@ inline void RegisterAll() {
             if (editor) {
                 int currentWidth = editor->GetMarginWidth(0);
                 editor->SetMarginWidth(0, currentWidth > 0 ? 0 : 40);
+            }
+        }
+    ));
+
+    // ========== Terminal Commands ==========
+
+    registry.Register(MakeCommand(
+        "terminal.toggle", "Toggle Terminal", "Terminal", "Ctrl+`",
+        "Show or hide the integrated terminal",
+        [](CommandContext& ctx) {
+            // MainFrame is stored in context - we use void* casting
+            // This is safe because we know MainFrame sets itself
+            auto* frame = static_cast<MainFrame*>(ctx.Get<wxWindow>("mainFrame"));
+            if (frame) {
+                frame->ToggleTerminal();
+            }
+        }
+    ));
+
+    registry.Register(MakeCommand(
+        "terminal.show", "Show Terminal", "Terminal", "",
+        "Show the integrated terminal",
+        [](CommandContext& ctx) {
+            auto* frame = static_cast<MainFrame*>(ctx.Get<wxWindow>("mainFrame"));
+            if (frame) {
+                frame->ShowTerminal(true);
+            }
+        }
+    ));
+
+    registry.Register(MakeCommand(
+        "terminal.hide", "Hide Terminal", "Terminal", "",
+        "Hide the integrated terminal",
+        [](CommandContext& ctx) {
+            auto* frame = static_cast<MainFrame*>(ctx.Get<wxWindow>("mainFrame"));
+            if (frame) {
+                frame->ShowTerminal(false);
+            }
+        },
+        [](const CommandContext& ctx) {
+            auto* frame = static_cast<MainFrame*>(ctx.Get<wxWindow>("mainFrame"));
+            return frame && frame->IsTerminalVisible();
+        }
+    ));
+
+    registry.Register(MakeCommand(
+        "terminal.clear", "Clear Terminal", "Terminal", "",
+        "Clear the terminal output",
+        [](CommandContext& ctx) {
+            auto* terminal = ctx.Get<Terminal>("terminal");
+            if (terminal) {
+                terminal->Clear();
+            }
+        }
+    ));
+
+    registry.Register(MakeCommand(
+        "terminal.focus", "Focus Terminal", "Terminal", "",
+        "Move focus to the terminal input",
+        [](CommandContext& ctx) {
+            auto* frame = static_cast<MainFrame*>(ctx.Get<wxWindow>("mainFrame"));
+            auto* terminal = ctx.Get<Terminal>("terminal");
+            if (frame && terminal) {
+                frame->ShowTerminal(true);
+                terminal->SetFocus();
             }
         }
     ));
