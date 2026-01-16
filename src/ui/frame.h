@@ -3,7 +3,9 @@
 
 #include <wx/wx.h>
 #include <wx/treectrl.h>
+#include <wx/splitter.h>
 #include "editor.h"
+#include "terminal.h"
 #include "../commands/command.h"
 
 // Custom tree item data to store file paths
@@ -23,10 +25,20 @@ public:
     // Get the editor component (for commands)
     Editor* GetEditor() { return m_editor; }
     wxStyledTextCtrl* GetTextCtrl() { return m_editor ? m_editor->GetTextCtrl() : nullptr; }
+    
+    // Get the terminal component
+    Terminal* GetTerminal() { return m_terminal; }
+    
+    // Terminal visibility
+    void ShowTerminal(bool show = true);
+    void ToggleTerminal();
+    bool IsTerminalVisible() const;
 
 private:
     wxTreeCtrl* m_treeCtrl;
     Editor* m_editor;
+    Terminal* m_terminal;
+    wxSplitterWindow* m_rightSplitter; // Vertical splitter for editor/terminal
     
     void SetupUI();
     void SetupMenuBar();
@@ -49,6 +61,7 @@ private:
     void OnSave(wxCommandEvent& event);
     void OnSaveAs(wxCommandEvent& event);
     void OnClose(wxCloseEvent& event);
+    void OnToggleTerminal(wxCommandEvent& event);
     
     wxDECLARE_EVENT_TABLE();
 };

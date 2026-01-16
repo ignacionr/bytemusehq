@@ -13,7 +13,8 @@ enum {
     ID_NEW_FILE,
     ID_OPEN_FILE,
     ID_SAVE,
-    ID_SAVE_AS
+    ID_SAVE_AS,
+    ID_TOGGLE_TERMINAL
 };
 
 wxBEGIN_EVENT_TABLE(MainFrame, wxFrame)
@@ -25,6 +26,7 @@ wxBEGIN_EVENT_TABLE(MainFrame, wxFrame)
     EVT_MENU(ID_OPEN_FILE, MainFrame::OnOpenFile)
     EVT_MENU(ID_SAVE, MainFrame::OnSave)
     EVT_MENU(ID_SAVE_AS, MainFrame::OnSaveAs)
+    EVT_MENU(ID_TOGGLE_TERMINAL, MainFrame::OnToggleTerminal)
     EVT_CLOSE(MainFrame::OnClose)
 wxEND_EVENT_TABLE()
 
@@ -44,19 +46,24 @@ void MainFrame::SetupUI()
     wxPanel* mainPanel = new wxPanel(this);
     wxBoxSizer* mainSizer = new wxBoxSizer(wxHORIZONTAL);
     
-    // Create splitter window
-    wxSplitterWindow* splitter = new wxSplitterWindow(mainPanel);
+    // Create horizontal splitter window (tree | right area)
+    wxSplitterWindow* hSplitter = new wxSplitterWindow(mainPanel, wxID_ANY, 
+        wxDefaultPosition, wxDefaultSize, wxSP_LIVE_UPDATE);
     
     // Left panel: Tree control
-    wxPanel* leftPanel = new wxPanel(splitter);
+    wxPanel* leftPanel = new wxPanel(hSplitter);
     wxBoxSizer* leftSizer = new wxBoxSizer(wxVERTICAL);
     
     m_treeCtrl = new wxTreeCtrl(leftPanel, wxID_ANY);
     leftSizer->Add(m_treeCtrl, 1, wxEXPAND | wxALL, 0);
     leftPanel->SetSizer(leftSizer);
     
-    // Right panel: Editor (now using the modular Editor component)
-    m_editor = new Editor(splitter);
+    // Right area: Vertical splitter for editor/terminal
+    m_rightSplitter = new wxSplitterWindow(hSplitter, wxID_ANY,
+        wxDefaultPosition, wxDefaultSize, wxSP_LIVE_UPDATE);
+    
+    // Editor component
+    m_editor = new Editor(m_rightSplitter);
     
     // Set up callbacks for dirty state and file changes
     m_editor->SetDirtyStateCallback([this](bool isDirty) {
@@ -67,12 +74,19 @@ void MainFrame::SetupUI()
         UpdateTitle();
     });
     
-    // Split the splitter
-    splitter->SplitVertically(leftPanel, m_editor);
-    splitter->SetSashPosition(250);
-    splitter->SetMinimumPaneSize(100);
+    // Terminal component
+    m_terminal = new Terminal(m_rightSplitter);
     
-    mainSizer->Add(splitter, 1, wxEXPAND);
+    // Initially show only editor (terminal hidden)
+    m_rightSplitter->Initialize(m_editor);
+    m_rightSplitter->SetMinimumPaneSize(100);
+    
+    // Split horizontal (tree | right)
+    hSplitter->SplitVertically(leftPanel, m_rightSplitter);
+    hSplitter->SetSashPosition(250);
+    hSplitter->SetMinimumPaneSize(100);
+    
+    mainSizer->Add(hSplitter, 1, wxEXPAND);
     mainPanel->SetSizer(mainSizer);
     
     // Populate tree with current directory
@@ -99,6 +113,8 @@ void MainFrame::SetupMenuBar()
     // View menu
     wxMenu* viewMenu = new wxMenu();
     viewMenu->Append(ID_COMMAND_PALETTE, "Command Palette\tCtrl+Shift+P", "Open command palette");
+    viewMenu->AppendSeparator();
+    viewMenu->Append(ID_TOGGLE_TERMINAL, "Toggle Terminal\tCtrl+`", "Show or hide terminal");
     
     menuBar->Append(fileMenu, "&File");
     menuBar->Append(viewMenu, "&View");
@@ -209,10 +225,11 @@ void MainFrame::RegisterCommands()
 
 void MainFrame::SetupAccelerators()
 {
-    // Set up keyboard shortcut for command palette (Ctrl+Shift+P)
-    wxAcceleratorEntry entries[1];
+    // Set up keyboard shortcuts
+    wxAcceleratorEntry entries[2];
     entries[0].Set(wxACCEL_CTRL | wxACCEL_SHIFT, 'P', ID_COMMAND_PALETTE);
-    wxAcceleratorTable accel(1, entries);
+    entries[1].Set(wxACCEL_CTRL, '`', ID_TOGGLE_TERMINAL);
+    wxAcceleratorTable accel(2, entries);
     SetAcceleratorTable(accel);
 }
 
@@ -222,6 +239,7 @@ CommandContext MainFrame::CreateCommandContext()
     ctx.Set<wxWindow>("window", this);
     ctx.Set<wxStyledTextCtrl>("editor", m_editor->GetTextCtrl());
     ctx.Set<Editor>("editorComponent", m_editor);
+    ctx.Set<Terminal>("terminal", m_terminal);
     wxString currentFile = m_editor->GetFilePath();
     ctx.Set<wxString>("currentFile", &currentFile);
     return ctx;
@@ -285,4 +303,42 @@ void MainFrame::OnClose(wxCloseEvent& event)
         }
     }
     event.Skip();
+}
+
+void MainFrame::ShowTerminal(bool show)
+{
+    if (show) {
+        if (!m_rightSplitter->IsSplit()) {
+            // Show terminal by splitting
+            m_terminal->Show();
+            m_rightSplitter->SplitHorizontally(m_editor, m_terminal);
+            // Position sash at 70% height (editor gets more space)
+            int height = m_rightSplitter->GetSize().GetHeight();
+            m_rightSplitter->SetSashPosition(height * 7 / 10);
+        }
+        // Focus the terminal input
+        m_terminal->SetFocus();
+    }
+    else {
+        if (m_rightSplitter->IsSplit()) {
+            // Hide terminal by unsplitting
+            m_rightSplitter->Unsplit(m_terminal);
+            m_terminal->Hide();
+        }
+    }
+}
+
+void MainFrame::ToggleTerminal()
+{
+    ShowTerminal(!IsTerminalVisible());
+}
+
+bool MainFrame::IsTerminalVisible() const
+{
+    return m_rightSplitter->IsSplit();
+}
+
+void MainFrame::OnToggleTerminal(wxCommandEvent& event)
+{
+    ToggleTerminal();
 }

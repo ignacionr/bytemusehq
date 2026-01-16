@@ -19,12 +19,14 @@ set(SOURCES
     src/main.cpp
     src/ui/frame.cpp
     src/ui/editor.cpp
+    src/ui/terminal.cpp
     src/commands/command_palette.cpp
 )
 
 set(HEADERS
     src/ui/frame.h
     src/ui/editor.h
+    src/ui/terminal.h
     src/commands/command.h
     src/commands/command_registry.h
     src/commands/command_palette.h
