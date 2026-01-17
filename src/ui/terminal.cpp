@@ -10,20 +10,33 @@ Terminal::Terminal(wxWindow* parent, wxWindowID id)
     : wxPanel(parent, id)
     , m_output(nullptr)
     , m_input(nullptr)
+    , m_label(nullptr)
+    , m_prompt(nullptr)
     , m_process(nullptr)
     , m_pid(0)
     , m_processInput(nullptr)
     , m_processOutput(nullptr)
     , m_processError(nullptr)
     , m_historyIndex(-1)
+    , m_themeListenerId(0)
 {
     m_workingDir = wxGetCwd();
     SetupUI();
+    ApplyCurrentTheme();
     StartShell();
+    
+    // Listen for theme changes
+    m_themeListenerId = ThemeManager::Instance().AddChangeListener(
+        [this](const ThemePtr& theme) {
+            ApplyTheme(theme);
+        });
 }
 
 Terminal::~Terminal()
 {
+    if (m_themeListenerId > 0) {
+        ThemeManager::Instance().RemoveChangeListener(m_themeListenerId);
+    }
     StopShell();
 }
 
@@ -33,11 +46,11 @@ void Terminal::SetupUI()
     
     // Header with label
     wxBoxSizer* headerSizer = new wxBoxSizer(wxHORIZONTAL);
-    wxStaticText* label = new wxStaticText(this, wxID_ANY, "Terminal");
-    wxFont boldFont = label->GetFont();
+    m_label = new wxStaticText(this, wxID_ANY, "Terminal");
+    wxFont boldFont = m_label->GetFont();
     boldFont.SetWeight(wxFONTWEIGHT_BOLD);
-    label->SetFont(boldFont);
-    headerSizer->Add(label, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, 5);
+    m_label->SetFont(boldFont);
+    headerSizer->Add(m_label, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, 5);
     headerSizer->AddStretchSpacer();
     
     // Clear button
@@ -55,17 +68,15 @@ void Terminal::SetupUI()
     // Use monospace font
     wxFont monoFont(10, wxFONTFAMILY_TELETYPE, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
     m_output->SetFont(monoFont);
-    m_output->SetBackgroundColour(wxColour(30, 30, 30));
-    m_output->SetForegroundColour(wxColour(204, 204, 204));
     
     sizer->Add(m_output, 1, wxEXPAND | wxLEFT | wxRIGHT, 2);
     
     // Input area with prompt
     wxBoxSizer* inputSizer = new wxBoxSizer(wxHORIZONTAL);
     
-    wxStaticText* prompt = new wxStaticText(this, wxID_ANY, ">");
-    prompt->SetFont(monoFont);
-    inputSizer->Add(prompt, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, 5);
+    m_prompt = new wxStaticText(this, wxID_ANY, ">");
+    m_prompt->SetFont(monoFont);
+    inputSizer->Add(m_prompt, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, 5);
     
     m_input = new wxTextCtrl(this, wxID_ANY, wxEmptyString,
         wxDefaultPosition, wxDefaultSize, wxTE_PROCESS_ENTER);
@@ -78,6 +89,47 @@ void Terminal::SetupUI()
     sizer->Add(inputSizer, 0, wxEXPAND | wxBOTTOM, 3);
     
     SetSizer(sizer);
+}
+
+void Terminal::ApplyCurrentTheme()
+{
+    auto theme = ThemeManager::Instance().GetCurrentTheme();
+    if (theme) {
+        ApplyTheme(theme);
+    }
+}
+
+void Terminal::ApplyTheme(const ThemePtr& theme)
+{
+    if (!theme) return;
+    
+    const auto& colors = theme->terminal;
+    
+    // Panel background
+    SetBackgroundColour(colors.background);
+    
+    // Output area
+    if (m_output) {
+        m_output->SetBackgroundColour(colors.background);
+        m_output->SetForegroundColour(colors.foreground);
+    }
+    
+    // Input area
+    if (m_input) {
+        m_input->SetBackgroundColour(colors.inputBackground);
+        m_input->SetForegroundColour(colors.inputForeground);
+    }
+    
+    // Label and prompt
+    if (m_label) {
+        m_label->SetForegroundColour(colors.foreground);
+    }
+    if (m_prompt) {
+        m_prompt->SetForegroundColour(colors.prompt);
+    }
+    
+    // Refresh to apply colors
+    Refresh();
 }
 
 wxString Terminal::GetShellCommand()

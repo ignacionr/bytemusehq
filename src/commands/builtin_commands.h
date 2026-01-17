@@ -4,11 +4,14 @@
 #include "command.h"
 #include "command_registry.h"
 #include "../ui/terminal.h"
+#include "../theme/theme.h"
+#include "../config/config.h"
 #include <wx/stc/stc.h>
 #include <wx/filedlg.h>
 #include <wx/msgdlg.h>
 #include <wx/textdlg.h>
 #include <wx/aboutdlg.h>
+#include <wx/choicdlg.h>
 
 // Forward declaration to avoid circular include
 class MainFrame;
@@ -412,6 +415,121 @@ inline void RegisterAll() {
             auto* window = ctx.Get<wxWindow>("window");
             if (window) {
                 window->Close();
+            }
+        }
+    ));
+
+    // ========== Theme Commands ==========
+
+    registry.Register(MakeCommand(
+        "theme.select", "Select Color Theme", "Preferences", "",
+        "Choose a color theme for the editor",
+        [](CommandContext& ctx) {
+            auto* window = ctx.Get<wxWindow>("window");
+            if (!window) return;
+
+            auto& themeManager = ThemeManager::Instance();
+            auto themes = themeManager.GetAllThemes();
+            
+            wxArrayString themeNames;
+            for (const auto& theme : themes) {
+                themeNames.Add(theme->name + (theme->isDark ? " (Dark)" : " (Light)"));
+            }
+            
+            // Find current selection
+            int currentIdx = 0;
+            auto currentTheme = themeManager.GetCurrentTheme();
+            for (size_t i = 0; i < themes.size(); i++) {
+                if (themes[i]->id == currentTheme->id) {
+                    currentIdx = i;
+                    break;
+                }
+            }
+            
+            wxSingleChoiceDialog dlg(window, "Select a color theme:",
+                                     "Color Theme", themeNames);
+            dlg.SetSelection(currentIdx);
+            
+            if (dlg.ShowModal() == wxID_OK) {
+                int selection = dlg.GetSelection();
+                if (selection >= 0 && selection < static_cast<int>(themes.size())) {
+                    themeManager.SetCurrentTheme(themes[selection]->id);
+                }
+            }
+        }
+    ));
+
+    registry.Register(MakeCommand(
+        "theme.dark", "Use Dark Theme", "Preferences", "",
+        "Switch to the dark color theme",
+        [](CommandContext& ctx) {
+            ThemeManager::Instance().SetCurrentTheme("dark");
+        },
+        [](const CommandContext& ctx) {
+            return ThemeManager::Instance().GetCurrentTheme()->id != "dark";
+        }
+    ));
+
+    registry.Register(MakeCommand(
+        "theme.light", "Use Light Theme", "Preferences", "",
+        "Switch to the light color theme",
+        [](CommandContext& ctx) {
+            ThemeManager::Instance().SetCurrentTheme("light");
+        },
+        [](const CommandContext& ctx) {
+            return ThemeManager::Instance().GetCurrentTheme()->id != "light";
+        }
+    ));
+
+    registry.Register(MakeCommand(
+        "theme.toggle", "Toggle Dark/Light Theme", "Preferences", "",
+        "Switch between dark and light themes",
+        [](CommandContext& ctx) {
+            auto& manager = ThemeManager::Instance();
+            if (manager.GetCurrentTheme()->isDark) {
+                manager.SetCurrentTheme("light");
+            } else {
+                manager.SetCurrentTheme("dark");
+            }
+        }
+    ));
+
+    // ========== Configuration Commands ==========
+
+    registry.Register(MakeCommand(
+        "config.openSettings", "Open Settings File", "Preferences", "",
+        "Open the configuration file for editing",
+        [](CommandContext& ctx) {
+            auto* frame = static_cast<MainFrame*>(ctx.Get<wxWindow>("mainFrame"));
+            if (!frame) return;
+            
+            auto& config = Config::Instance();
+            wxString configPath = config.GetConfigFilePath();
+            
+            // Ensure config file exists
+            config.Save();
+            
+            // Open in editor
+            auto* editor = frame->GetEditor();
+            if (editor) {
+                editor->OpenFile(configPath);
+            }
+        }
+    ));
+
+    registry.Register(MakeCommand(
+        "config.reload", "Reload Settings", "Preferences", "",
+        "Reload configuration from file",
+        [](CommandContext& ctx) {
+            auto& config = Config::Instance();
+            if (config.Load()) {
+                // Re-initialize theme from config
+                ThemeManager::Instance().Initialize();
+                wxMessageBox("Settings reloaded successfully.", "Settings", 
+                            wxOK | wxICON_INFORMATION);
+            } else {
+                wxMessageBox("Failed to reload settings.", "Error", 
+                            wxOK | wxICON_ERROR);
             }
         }
     ));

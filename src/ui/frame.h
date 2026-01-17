@@ -7,6 +7,7 @@
 #include "editor.h"
 #include "terminal.h"
 #include "../commands/command.h"
+#include "../theme/theme.h"
 
 // Custom tree item data to store file paths
 class PathData : public wxTreeItemData {
@@ -21,6 +22,7 @@ private:
 class MainFrame : public wxFrame {
 public:
     MainFrame();
+    ~MainFrame();
 
     // Get the editor component (for commands)
     Editor* GetEditor() { return m_editor; }
@@ -39,6 +41,10 @@ private:
     Editor* m_editor;
     Terminal* m_terminal;
     wxSplitterWindow* m_rightSplitter; // Vertical splitter for editor/terminal
+    wxSplitterWindow* m_hSplitter;     // Horizontal splitter (tree | right)
+    wxPanel* m_mainPanel;
+    wxPanel* m_leftPanel;
+    int m_themeListenerId;
     
     void SetupUI();
     void SetupMenuBar();
@@ -46,6 +52,10 @@ private:
     void RegisterCommands();
     void PopulateTree(const wxString& path, wxTreeItemId parentItem);
     void UpdateTitle();
+    
+    // Theme support
+    void ApplyTheme(const ThemePtr& theme);
+    void ApplyCurrentTheme();
     
     // Command palette
     void ShowCommandPalette();

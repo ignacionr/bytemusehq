@@ -7,6 +7,7 @@
 #include "../commands/command_registry.h"
 #include "../commands/command_palette.h"
 #include "../commands/builtin_commands.h"
+#include "../theme/theme.h"
 
 enum {
     ID_COMMAND_PALETTE = wxID_HIGHEST + 1,
@@ -32,34 +33,49 @@ wxEND_EVENT_TABLE()
 
 MainFrame::MainFrame()
     : wxFrame(nullptr, wxID_ANY, "ByteMuseHQ", wxDefaultPosition, wxSize(1000, 600))
+    , m_themeListenerId(0)
 {
     RegisterCommands();
     SetupUI();
     SetupMenuBar();
     SetupAccelerators();
+    ApplyCurrentTheme();
     UpdateTitle();
+    
+    // Listen for theme changes
+    m_themeListenerId = ThemeManager::Instance().AddChangeListener(
+        [this](const ThemePtr& theme) {
+            ApplyTheme(theme);
+        });
+}
+
+MainFrame::~MainFrame()
+{
+    if (m_themeListenerId > 0) {
+        ThemeManager::Instance().RemoveChangeListener(m_themeListenerId);
+    }
 }
 
 void MainFrame::SetupUI()
 {
     // Create main panel and sizer
-    wxPanel* mainPanel = new wxPanel(this);
+    m_mainPanel = new wxPanel(this);
     wxBoxSizer* mainSizer = new wxBoxSizer(wxHORIZONTAL);
     
     // Create horizontal splitter window (tree | right area)
-    wxSplitterWindow* hSplitter = new wxSplitterWindow(mainPanel, wxID_ANY, 
+    m_hSplitter = new wxSplitterWindow(m_mainPanel, wxID_ANY, 
         wxDefaultPosition, wxDefaultSize, wxSP_LIVE_UPDATE);
     
     // Left panel: Tree control
-    wxPanel* leftPanel = new wxPanel(hSplitter);
+    m_leftPanel = new wxPanel(m_hSplitter);
     wxBoxSizer* leftSizer = new wxBoxSizer(wxVERTICAL);
     
-    m_treeCtrl = new wxTreeCtrl(leftPanel, wxID_ANY);
+    m_treeCtrl = new wxTreeCtrl(m_leftPanel, wxID_ANY);
     leftSizer->Add(m_treeCtrl, 1, wxEXPAND | wxALL, 0);
-    leftPanel->SetSizer(leftSizer);
+    m_leftPanel->SetSizer(leftSizer);
     
     // Right area: Vertical splitter for editor/terminal
-    m_rightSplitter = new wxSplitterWindow(hSplitter, wxID_ANY,
+    m_rightSplitter = new wxSplitterWindow(m_hSplitter, wxID_ANY,
         wxDefaultPosition, wxDefaultSize, wxSP_LIVE_UPDATE);
     
     // Editor component
@@ -82,18 +98,64 @@ void MainFrame::SetupUI()
     m_rightSplitter->SetMinimumPaneSize(100);
     
     // Split horizontal (tree | right)
-    hSplitter->SplitVertically(leftPanel, m_rightSplitter);
-    hSplitter->SetSashPosition(250);
-    hSplitter->SetMinimumPaneSize(100);
+    m_hSplitter->SplitVertically(m_leftPanel, m_rightSplitter);
+    m_hSplitter->SetSashPosition(250);
+    m_hSplitter->SetMinimumPaneSize(100);
     
-    mainSizer->Add(hSplitter, 1, wxEXPAND);
-    mainPanel->SetSizer(mainSizer);
+    mainSizer->Add(m_hSplitter, 1, wxEXPAND);
+    m_mainPanel->SetSizer(mainSizer);
     
     // Populate tree with current directory
     wxString currentDir = wxGetCwd();
     wxTreeItemId rootId = m_treeCtrl->AddRoot(currentDir);
     PopulateTree(currentDir, rootId);
     m_treeCtrl->Expand(rootId);
+}
+
+void MainFrame::ApplyCurrentTheme()
+{
+    auto theme = ThemeManager::Instance().GetCurrentTheme();
+    if (theme) {
+        ApplyTheme(theme);
+    }
+}
+
+void MainFrame::ApplyTheme(const ThemePtr& theme)
+{
+    if (!theme) return;
+    
+    const auto& ui = theme->ui;
+    
+    // Main frame background
+    SetBackgroundColour(ui.windowBackground);
+    
+    // Main panel
+    if (m_mainPanel) {
+        m_mainPanel->SetBackgroundColour(ui.windowBackground);
+    }
+    
+    // Left panel (sidebar)
+    if (m_leftPanel) {
+        m_leftPanel->SetBackgroundColour(ui.sidebarBackground);
+    }
+    
+    // Tree control (sidebar)
+    if (m_treeCtrl) {
+        m_treeCtrl->SetBackgroundColour(ui.sidebarBackground);
+        m_treeCtrl->SetForegroundColour(ui.sidebarForeground);
+    }
+    
+    // Splitters
+    if (m_hSplitter) {
+        m_hSplitter->SetBackgroundColour(ui.border);
+    }
+    if (m_rightSplitter) {
+        m_rightSplitter->SetBackgroundColour(ui.border);
+    }
+    
+    // Refresh all
+    Refresh();
+    Update();
 }
 
 void MainFrame::SetupMenuBar()

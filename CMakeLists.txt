@@ -21,6 +21,8 @@ set(SOURCES
     src/ui/editor.cpp
     src/ui/terminal.cpp
     src/commands/command_palette.cpp
+    src/config/config.cpp
+    src/theme/theme.cpp
 )
 
 set(HEADERS
@@ -31,6 +33,8 @@ set(HEADERS
     src/commands/command_registry.h
     src/commands/command_palette.h
     src/commands/builtin_commands.h
+    src/config/config.h
+    src/theme/theme.h
 )
 
 # Create executable

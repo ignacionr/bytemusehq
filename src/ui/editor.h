@@ -5,6 +5,7 @@
 #include <wx/stc/stc.h>
 #include <wx/file.h>
 #include <functional>
+#include "../theme/theme.h"
 
 /**
  * Editor component for ByteMuseHQ.
@@ -44,11 +45,15 @@ public:
 
     // Prompt to save if modified. Returns true if it's ok to proceed (saved or discarded)
     bool PromptSaveIfModified();
+    
+    // Theme support
+    void ApplyTheme(const ThemePtr& theme);
 
 private:
     wxStyledTextCtrl* m_textCtrl;
     wxString m_currentFilePath;
     bool m_isModified;
+    int m_themeListenerId;
     
     // Callbacks
     DirtyStateCallback m_dirtyCallback;
@@ -57,6 +62,8 @@ private:
     // Setup methods
     void SetupTextCtrl();
     void ConfigureLexer(const wxString& extension);
+    void ApplyCurrentTheme();
+    void ApplySyntaxColors(const ThemePtr& theme);
     
     // Internal state management
     void SetModified(bool modified);

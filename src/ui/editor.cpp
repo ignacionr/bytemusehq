@@ -12,8 +12,16 @@ Editor::Editor(wxWindow* parent, wxWindowID id)
     : wxPanel(parent, id)
     , m_textCtrl(nullptr)
     , m_isModified(false)
+    , m_themeListenerId(0)
 {
     SetupTextCtrl();
+    ApplyCurrentTheme();
+    
+    // Listen for theme changes
+    m_themeListenerId = ThemeManager::Instance().AddChangeListener(
+        [this](const ThemePtr& theme) {
+            ApplyTheme(theme);
+        });
 }
 
 void Editor::SetupTextCtrl()
@@ -45,7 +53,6 @@ void Editor::SetupTextCtrl()
     
     // Caret and selection
     m_textCtrl->SetCaretLineVisible(true);
-    m_textCtrl->SetCaretLineBackground(wxColour(245, 245, 245));
     
     // Word wrap (off by default)
     m_textCtrl->SetWrapMode(wxSTC_WRAP_NONE);
@@ -57,12 +64,178 @@ void Editor::SetupTextCtrl()
     SetSizer(sizer);
 }
 
+void Editor::ApplyCurrentTheme()
+{
+    auto theme = ThemeManager::Instance().GetCurrentTheme();
+    if (theme) {
+        ApplyTheme(theme);
+    }
+}
+
+void Editor::ApplyTheme(const ThemePtr& theme)
+{
+    if (!theme || !m_textCtrl) return;
+    
+    const auto& colors = theme->editor;
+    
+    // Set all styles to default first
+    for (int i = 0; i < wxSTC_STYLE_MAX; i++) {
+        m_textCtrl->StyleSetBackground(i, colors.background);
+        m_textCtrl->StyleSetForeground(i, colors.foreground);
+    }
+    
+    // Editor background and foreground
+    m_textCtrl->StyleSetBackground(wxSTC_STYLE_DEFAULT, colors.background);
+    m_textCtrl->StyleSetForeground(wxSTC_STYLE_DEFAULT, colors.foreground);
+    m_textCtrl->StyleClearAll();  // Apply default to all styles
+    
+    // Line numbers
+    m_textCtrl->StyleSetBackground(wxSTC_STYLE_LINENUMBER, colors.lineNumberBackground);
+    m_textCtrl->StyleSetForeground(wxSTC_STYLE_LINENUMBER, colors.lineNumberForeground);
+    m_textCtrl->SetMarginType(0, wxSTC_MARGIN_NUMBER);
+    m_textCtrl->SetMarginWidth(0, 50);
+    
+    // Caret and caret line
+    m_textCtrl->SetCaretForeground(colors.caret);
+    m_textCtrl->SetCaretLineVisible(true);
+    m_textCtrl->SetCaretLineBackground(colors.caretLine);
+    
+    // Selection
+    m_textCtrl->SetSelBackground(true, colors.selection);
+    m_textCtrl->SetSelForeground(true, colors.selectionForeground);
+    
+    // Whitespace
+    m_textCtrl->SetWhitespaceForeground(true, colors.whitespace);
+    
+    // Indent guides
+    m_textCtrl->StyleSetForeground(wxSTC_STYLE_INDENTGUIDE, colors.indentGuide);
+    
+    // Re-apply syntax highlighting for current lexer
+    ApplySyntaxColors(theme);
+    
+    // Refresh display
+    m_textCtrl->Refresh();
+}
+
+void Editor::ApplySyntaxColors(const ThemePtr& theme)
+{
+    if (!theme || !m_textCtrl) return;
+    
+    const auto& colors = theme->editor;
+    int lexer = m_textCtrl->GetLexer();
+    
+    // Apply colors based on current lexer
+    if (lexer == wxSTC_LEX_CPP) {
+        // C/C++ styling
+        m_textCtrl->StyleSetForeground(wxSTC_C_DEFAULT, colors.foreground);
+        m_textCtrl->StyleSetForeground(wxSTC_C_COMMENT, colors.comment);
+        m_textCtrl->StyleSetForeground(wxSTC_C_COMMENTLINE, colors.comment);
+        m_textCtrl->StyleSetForeground(wxSTC_C_COMMENTDOC, colors.comment);
+        m_textCtrl->StyleSetForeground(wxSTC_C_COMMENTLINEDOC, colors.comment);
+        m_textCtrl->StyleSetForeground(wxSTC_C_NUMBER, colors.number);
+        m_textCtrl->StyleSetForeground(wxSTC_C_WORD, colors.keyword);
+        m_textCtrl->StyleSetBold(wxSTC_C_WORD, true);
+        m_textCtrl->StyleSetForeground(wxSTC_C_STRING, colors.string);
+        m_textCtrl->StyleSetForeground(wxSTC_C_CHARACTER, colors.string);
+        m_textCtrl->StyleSetForeground(wxSTC_C_PREPROCESSOR, colors.preprocessor);
+        m_textCtrl->StyleSetForeground(wxSTC_C_OPERATOR, colors.operator_);
+        m_textCtrl->StyleSetForeground(wxSTC_C_IDENTIFIER, colors.identifier);
+        m_textCtrl->StyleSetForeground(wxSTC_C_STRINGEOL, colors.string);
+        m_textCtrl->StyleSetForeground(wxSTC_C_VERBATIM, colors.string);
+        m_textCtrl->StyleSetForeground(wxSTC_C_REGEX, colors.string);
+        m_textCtrl->StyleSetForeground(wxSTC_C_WORD2, colors.type);
+        
+        // Background for all C++ styles
+        for (int i = wxSTC_C_DEFAULT; i <= wxSTC_C_PREPROCESSORCOMMENTDOC; i++) {
+            m_textCtrl->StyleSetBackground(i, colors.background);
+        }
+    }
+    else if (lexer == wxSTC_LEX_PYTHON) {
+        m_textCtrl->StyleSetForeground(wxSTC_P_DEFAULT, colors.foreground);
+        m_textCtrl->StyleSetForeground(wxSTC_P_COMMENTLINE, colors.comment);
+        m_textCtrl->StyleSetForeground(wxSTC_P_COMMENTBLOCK, colors.comment);
+        m_textCtrl->StyleSetForeground(wxSTC_P_NUMBER, colors.number);
+        m_textCtrl->StyleSetForeground(wxSTC_P_STRING, colors.string);
+        m_textCtrl->StyleSetForeground(wxSTC_P_CHARACTER, colors.string);
+        m_textCtrl->StyleSetForeground(wxSTC_P_WORD, colors.keyword);
+        m_textCtrl->StyleSetBold(wxSTC_P_WORD, true);
+        m_textCtrl->StyleSetForeground(wxSTC_P_TRIPLE, colors.string);
+        m_textCtrl->StyleSetForeground(wxSTC_P_TRIPLEDOUBLE, colors.string);
+        m_textCtrl->StyleSetForeground(wxSTC_P_CLASSNAME, colors.type);
+        m_textCtrl->StyleSetForeground(wxSTC_P_DEFNAME, colors.function);
+        m_textCtrl->StyleSetForeground(wxSTC_P_OPERATOR, colors.operator_);
+        m_textCtrl->StyleSetForeground(wxSTC_P_IDENTIFIER, colors.identifier);
+        m_textCtrl->StyleSetForeground(wxSTC_P_DECORATOR, colors.preprocessor);
+        
+        // Background for all Python styles
+        for (int i = wxSTC_P_DEFAULT; i <= wxSTC_P_DECORATOR; i++) {
+            m_textCtrl->StyleSetBackground(i, colors.background);
+        }
+    }
+    else if (lexer == wxSTC_LEX_JSON) {
+        m_textCtrl->StyleSetForeground(wxSTC_JSON_DEFAULT, colors.foreground);
+        m_textCtrl->StyleSetForeground(wxSTC_JSON_STRING, colors.string);
+        m_textCtrl->StyleSetForeground(wxSTC_JSON_NUMBER, colors.number);
+        m_textCtrl->StyleSetForeground(wxSTC_JSON_PROPERTYNAME, colors.keyword);
+        m_textCtrl->StyleSetForeground(wxSTC_JSON_KEYWORD, colors.keyword);
+        m_textCtrl->StyleSetForeground(wxSTC_JSON_OPERATOR, colors.operator_);
+        m_textCtrl->StyleSetForeground(wxSTC_JSON_ERROR, wxColour(255, 0, 0));
+        
+        for (int i = wxSTC_JSON_DEFAULT; i <= wxSTC_JSON_ERROR; i++) {
+            m_textCtrl->StyleSetBackground(i, colors.background);
+        }
+    }
+    else if (lexer == wxSTC_LEX_HTML) {
+        m_textCtrl->StyleSetForeground(wxSTC_H_DEFAULT, colors.foreground);
+        m_textCtrl->StyleSetForeground(wxSTC_H_TAG, colors.keyword);
+        m_textCtrl->StyleSetForeground(wxSTC_H_TAGUNKNOWN, colors.keyword);
+        m_textCtrl->StyleSetForeground(wxSTC_H_ATTRIBUTE, colors.type);
+        m_textCtrl->StyleSetForeground(wxSTC_H_ATTRIBUTEUNKNOWN, colors.type);
+        m_textCtrl->StyleSetForeground(wxSTC_H_NUMBER, colors.number);
+        m_textCtrl->StyleSetForeground(wxSTC_H_DOUBLESTRING, colors.string);
+        m_textCtrl->StyleSetForeground(wxSTC_H_SINGLESTRING, colors.string);
+        m_textCtrl->StyleSetForeground(wxSTC_H_COMMENT, colors.comment);
+        
+        for (int i = wxSTC_H_DEFAULT; i <= wxSTC_H_QUESTION; i++) {
+            m_textCtrl->StyleSetBackground(i, colors.background);
+        }
+    }
+    else if (lexer == wxSTC_LEX_MARKDOWN) {
+        m_textCtrl->StyleSetForeground(wxSTC_MARKDOWN_DEFAULT, colors.foreground);
+        m_textCtrl->StyleSetForeground(wxSTC_MARKDOWN_LINE_BEGIN, colors.foreground);
+        m_textCtrl->StyleSetForeground(wxSTC_MARKDOWN_STRONG1, colors.keyword);
+        m_textCtrl->StyleSetBold(wxSTC_MARKDOWN_STRONG1, true);
+        m_textCtrl->StyleSetForeground(wxSTC_MARKDOWN_STRONG2, colors.keyword);
+        m_textCtrl->StyleSetBold(wxSTC_MARKDOWN_STRONG2, true);
+        m_textCtrl->StyleSetForeground(wxSTC_MARKDOWN_EM1, colors.string);
+        m_textCtrl->StyleSetItalic(wxSTC_MARKDOWN_EM1, true);
+        m_textCtrl->StyleSetForeground(wxSTC_MARKDOWN_EM2, colors.string);
+        m_textCtrl->StyleSetItalic(wxSTC_MARKDOWN_EM2, true);
+        m_textCtrl->StyleSetForeground(wxSTC_MARKDOWN_HEADER1, colors.keyword);
+        m_textCtrl->StyleSetBold(wxSTC_MARKDOWN_HEADER1, true);
+        m_textCtrl->StyleSetForeground(wxSTC_MARKDOWN_HEADER2, colors.keyword);
+        m_textCtrl->StyleSetBold(wxSTC_MARKDOWN_HEADER2, true);
+        m_textCtrl->StyleSetForeground(wxSTC_MARKDOWN_HEADER3, colors.keyword);
+        m_textCtrl->StyleSetForeground(wxSTC_MARKDOWN_HEADER4, colors.keyword);
+        m_textCtrl->StyleSetForeground(wxSTC_MARKDOWN_HEADER5, colors.keyword);
+        m_textCtrl->StyleSetForeground(wxSTC_MARKDOWN_HEADER6, colors.keyword);
+        m_textCtrl->StyleSetForeground(wxSTC_MARKDOWN_CODE, colors.function);
+        m_textCtrl->StyleSetForeground(wxSTC_MARKDOWN_CODE2, colors.function);
+        m_textCtrl->StyleSetForeground(wxSTC_MARKDOWN_CODEBK, colors.function);
+        m_textCtrl->StyleSetForeground(wxSTC_MARKDOWN_LINK, colors.identifier);
+        
+        for (int i = wxSTC_MARKDOWN_DEFAULT; i <= wxSTC_MARKDOWN_CODEBK; i++) {
+            m_textCtrl->StyleSetBackground(i, colors.background);
+        }
+    }
+}
+
 void Editor::ConfigureLexer(const wxString& extension)
 {
     wxString ext = extension.Lower();
     
-    // Reset styles first
-    m_textCtrl->StyleClearAll();
+    // Get current theme colors
+    auto theme = ThemeManager::Instance().GetCurrentTheme();
     
     if (ext == "cpp" || ext == "c" || ext == "h" || ext == "hpp" || ext == "cc" || ext == "cxx") {
         m_textCtrl->SetLexer(wxSTC_LEX_CPP);
@@ -80,19 +253,6 @@ void Editor::ConfigureLexer(const wxString& extension)
             "thread_local throw true try typedef typeid typename union unsigned "
             "using virtual void volatile wchar_t while xor xor_eq "
             "override final");
-        
-        // Styling for C++
-        m_textCtrl->StyleSetForeground(wxSTC_C_COMMENT, wxColour(0, 128, 0));
-        m_textCtrl->StyleSetForeground(wxSTC_C_COMMENTLINE, wxColour(0, 128, 0));
-        m_textCtrl->StyleSetForeground(wxSTC_C_COMMENTDOC, wxColour(0, 128, 0));
-        m_textCtrl->StyleSetForeground(wxSTC_C_NUMBER, wxColour(0, 0, 192));
-        m_textCtrl->StyleSetForeground(wxSTC_C_WORD, wxColour(0, 0, 255));
-        m_textCtrl->StyleSetBold(wxSTC_C_WORD, true);
-        m_textCtrl->StyleSetForeground(wxSTC_C_STRING, wxColour(163, 21, 21));
-        m_textCtrl->StyleSetForeground(wxSTC_C_CHARACTER, wxColour(163, 21, 21));
-        m_textCtrl->StyleSetForeground(wxSTC_C_PREPROCESSOR, wxColour(128, 0, 128));
-        m_textCtrl->StyleSetForeground(wxSTC_C_OPERATOR, wxColour(0, 0, 0));
-        m_textCtrl->StyleSetForeground(wxSTC_C_IDENTIFIER, wxColour(0, 0, 0));
     }
     else if (ext == "py") {
         m_textCtrl->SetLexer(wxSTC_LEX_PYTHON);
@@ -100,12 +260,6 @@ void Editor::ConfigureLexer(const wxString& extension)
             "and as assert async await break class continue def del elif else "
             "except finally for from global if import in is lambda nonlocal not "
             "or pass raise return try while with yield None True False");
-        
-        m_textCtrl->StyleSetForeground(wxSTC_P_COMMENTLINE, wxColour(0, 128, 0));
-        m_textCtrl->StyleSetForeground(wxSTC_P_NUMBER, wxColour(0, 0, 192));
-        m_textCtrl->StyleSetForeground(wxSTC_P_STRING, wxColour(163, 21, 21));
-        m_textCtrl->StyleSetForeground(wxSTC_P_WORD, wxColour(0, 0, 255));
-        m_textCtrl->StyleSetBold(wxSTC_P_WORD, true);
     }
     else if (ext == "js" || ext == "ts" || ext == "jsx" || ext == "tsx") {
         m_textCtrl->SetLexer(wxSTC_LEX_CPP); // JavaScript uses CPP lexer
@@ -116,36 +270,27 @@ void Editor::ConfigureLexer(const wxString& extension)
             "import in instanceof int interface let long native new null package "
             "private protected public return short static super switch synchronized "
             "this throw throws transient true try typeof var void volatile while with yield");
-        
-        m_textCtrl->StyleSetForeground(wxSTC_C_COMMENT, wxColour(0, 128, 0));
-        m_textCtrl->StyleSetForeground(wxSTC_C_COMMENTLINE, wxColour(0, 128, 0));
-        m_textCtrl->StyleSetForeground(wxSTC_C_NUMBER, wxColour(0, 0, 192));
-        m_textCtrl->StyleSetForeground(wxSTC_C_WORD, wxColour(0, 0, 255));
-        m_textCtrl->StyleSetBold(wxSTC_C_WORD, true);
-        m_textCtrl->StyleSetForeground(wxSTC_C_STRING, wxColour(163, 21, 21));
     }
     else if (ext == "json") {
         m_textCtrl->SetLexer(wxSTC_LEX_JSON);
-        m_textCtrl->StyleSetForeground(wxSTC_JSON_STRING, wxColour(163, 21, 21));
-        m_textCtrl->StyleSetForeground(wxSTC_JSON_NUMBER, wxColour(0, 0, 192));
-        m_textCtrl->StyleSetForeground(wxSTC_JSON_PROPERTYNAME, wxColour(0, 0, 255));
     }
     else if (ext == "xml" || ext == "html" || ext == "htm") {
         m_textCtrl->SetLexer(wxSTC_LEX_HTML);
-        m_textCtrl->StyleSetForeground(wxSTC_H_TAG, wxColour(0, 0, 255));
-        m_textCtrl->StyleSetForeground(wxSTC_H_ATTRIBUTE, wxColour(255, 0, 0));
-        m_textCtrl->StyleSetForeground(wxSTC_H_DOUBLESTRING, wxColour(163, 21, 21));
-        m_textCtrl->StyleSetForeground(wxSTC_H_SINGLESTRING, wxColour(163, 21, 21));
     }
     else if (ext == "md" || ext == "markdown") {
         m_textCtrl->SetLexer(wxSTC_LEX_MARKDOWN);
     }
-    else if (ext == "cmake" || ext == "txt" && m_currentFilePath.Lower().Contains("cmakelists")) {
+    else if (ext == "cmake" || (ext == "txt" && m_currentFilePath.Lower().Contains("cmakelists"))) {
         m_textCtrl->SetLexer(wxSTC_LEX_CMAKE);
     }
     else {
         // Plain text
         m_textCtrl->SetLexer(wxSTC_LEX_NULL);
+    }
+    
+    // Apply theme colors for the lexer
+    if (theme) {
+        ApplySyntaxColors(theme);
     }
 }
 
