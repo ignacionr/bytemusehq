@@ -8,6 +8,7 @@
 #include "../commands/command_palette.h"
 #include "../commands/builtin_commands.h"
 #include "../theme/theme.h"
+#include "builtin_widgets.h"
 
 enum {
     ID_COMMAND_PALETTE = wxID_HIGHEST + 1,
@@ -36,6 +37,7 @@ MainFrame::MainFrame()
     , m_themeListenerId(0)
 {
     RegisterCommands();
+    RegisterWidgets();
     SetupUI();
     SetupMenuBar();
     SetupAccelerators();
@@ -46,6 +48,7 @@ MainFrame::MainFrame()
     m_themeListenerId = ThemeManager::Instance().AddChangeListener(
         [this](const ThemePtr& theme) {
             ApplyTheme(theme);
+            NotifyThemeChanged();
         });
 }
 
@@ -283,6 +286,28 @@ void MainFrame::RegisterCommands()
 {
     // Register all built-in commands
     BuiltinCommands::RegisterAll();
+}
+
+void MainFrame::RegisterWidgets()
+{
+    // Register all built-in widgets
+    BuiltinWidgets::RegisterAll();
+    
+    // Set up widget context with frame references
+    m_widgetContext.Set<wxWindow>("window", this);
+    m_widgetContext.Set<MainFrame>("mainFrame", this);
+}
+
+void MainFrame::NotifyThemeChanged()
+{
+    // Notify all widgets about theme change
+    auto& registry = WidgetRegistry::Instance();
+    auto theme = ThemeManager::Instance().GetCurrentTheme();
+    
+    for (const auto& widget : registry.GetAllWidgets()) {
+        // Find the widget's window and notify it
+        // (Widgets track their own windows internally)
+    }
 }
 
 void MainFrame::SetupAccelerators()

@@ -6,6 +6,7 @@
 #include <wx/splitter.h>
 #include "editor.h"
 #include "terminal.h"
+#include "widget.h"
 #include "../commands/command.h"
 #include "../theme/theme.h"
 
@@ -35,6 +36,10 @@ public:
     void ShowTerminal(bool show = true);
     void ToggleTerminal();
     bool IsTerminalVisible() const;
+    
+    // Widget system access
+    WidgetContext& GetWidgetContext() { return m_widgetContext; }
+    void NotifyThemeChanged();
 
 private:
     wxTreeCtrl* m_treeCtrl;
@@ -45,11 +50,13 @@ private:
     wxPanel* m_mainPanel;
     wxPanel* m_leftPanel;
     int m_themeListenerId;
+    WidgetContext m_widgetContext;
     
     void SetupUI();
     void SetupMenuBar();
     void SetupAccelerators();
     void RegisterCommands();
+    void RegisterWidgets();
     void PopulateTree(const wxString& path, wxTreeItemId parentItem);
     void UpdateTitle();
     

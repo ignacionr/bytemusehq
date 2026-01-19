@@ -29,6 +29,8 @@ set(HEADERS
     src/ui/frame.h
     src/ui/editor.h
     src/ui/terminal.h
+    src/ui/widget.h
+    src/ui/builtin_widgets.h
     src/commands/command.h
     src/commands/command_registry.h
     src/commands/command_palette.h
