@@ -39,9 +39,11 @@ MainFrame::MainFrame()
     RegisterCommands();
     RegisterWidgets();
     SetupUI();
+    SetupSidebarWidgets();  // Initialize sidebar widgets after UI is set up
     SetupMenuBar();
     SetupAccelerators();
     ApplyCurrentTheme();
+    NotifyThemeChanged();   // Apply theme to widgets
     UpdateTitle();
     
     // Listen for theme changes
@@ -65,17 +67,30 @@ void MainFrame::SetupUI()
     m_mainPanel = new wxPanel(this);
     wxBoxSizer* mainSizer = new wxBoxSizer(wxHORIZONTAL);
     
-    // Create horizontal splitter window (tree | right area)
+    // Create horizontal splitter window (left sidebar | right area)
     m_hSplitter = new wxSplitterWindow(m_mainPanel, wxID_ANY, 
         wxDefaultPosition, wxDefaultSize, wxSP_LIVE_UPDATE);
     
+    // Left area: Vertical splitter for tree/sidebar widgets
+    m_leftSplitter = new wxSplitterWindow(m_hSplitter, wxID_ANY,
+        wxDefaultPosition, wxDefaultSize, wxSP_LIVE_UPDATE);
+    
     // Left panel: Tree control
-    m_leftPanel = new wxPanel(m_hSplitter);
+    m_leftPanel = new wxPanel(m_leftSplitter);
     wxBoxSizer* leftSizer = new wxBoxSizer(wxVERTICAL);
     
     m_treeCtrl = new wxTreeCtrl(m_leftPanel, wxID_ANY);
     leftSizer->Add(m_treeCtrl, 1, wxEXPAND | wxALL, 0);
     m_leftPanel->SetSizer(leftSizer);
+    
+    // Sidebar widget container (for widgets like Timer)
+    m_sidebarWidgetContainer = new wxPanel(m_leftSplitter);
+    wxBoxSizer* sidebarSizer = new wxBoxSizer(wxVERTICAL);
+    m_sidebarWidgetContainer->SetSizer(sidebarSizer);
+    
+    // Initially show only tree (sidebar widgets added later)
+    m_leftSplitter->Initialize(m_leftPanel);
+    m_leftSplitter->SetMinimumPaneSize(100);
     
     // Right area: Vertical splitter for editor/terminal
     m_rightSplitter = new wxSplitterWindow(m_hSplitter, wxID_ANY,
@@ -100,8 +115,8 @@ void MainFrame::SetupUI()
     m_rightSplitter->Initialize(m_editor);
     m_rightSplitter->SetMinimumPaneSize(100);
     
-    // Split horizontal (tree | right)
-    m_hSplitter->SplitVertically(m_leftPanel, m_rightSplitter);
+    // Split horizontal (left | right)
+    m_hSplitter->SplitVertically(m_leftSplitter, m_rightSplitter);
     m_hSplitter->SetSashPosition(250);
     m_hSplitter->SetMinimumPaneSize(100);
     
@@ -140,6 +155,16 @@ void MainFrame::ApplyTheme(const ThemePtr& theme)
     // Left panel (sidebar)
     if (m_leftPanel) {
         m_leftPanel->SetBackgroundColour(ui.sidebarBackground);
+    }
+    
+    // Sidebar widget container
+    if (m_sidebarWidgetContainer) {
+        m_sidebarWidgetContainer->SetBackgroundColour(ui.sidebarBackground);
+    }
+    
+    // Left splitter
+    if (m_leftSplitter) {
+        m_leftSplitter->SetBackgroundColour(ui.border);
     }
     
     // Tree control (sidebar)
@@ -298,15 +323,120 @@ void MainFrame::RegisterWidgets()
     m_widgetContext.Set<MainFrame>("mainFrame", this);
 }
 
+void MainFrame::SetupSidebarWidgets()
+{
+    // Get all sidebar widgets from the registry
+    auto& registry = WidgetRegistry::Instance();
+    auto sidebarWidgets = registry.GetWidgetsByLocation(WidgetLocation::Sidebar);
+    
+    wxBoxSizer* sizer = dynamic_cast<wxBoxSizer*>(m_sidebarWidgetContainer->GetSizer());
+    if (!sizer) return;
+    
+    bool hasVisibleWidgets = false;
+    
+    for (auto& widget : sidebarWidgets) {
+        auto info = widget->GetInfo();
+        
+        // Skip FileTree widget as it has dedicated handling
+        if (info.id == "core.fileTree") continue;
+        
+        // Create the widget window
+        wxWindow* widgetWindow = widget->CreateWindow(m_sidebarWidgetContainer, m_widgetContext);
+        if (widgetWindow) {
+            sizer->Add(widgetWindow, 1, wxEXPAND);
+            m_sidebarWidgetWindows[info.id] = widgetWindow;
+            
+            // Register widget's commands
+            widget->RegisterCommands(m_widgetContext);
+            
+            // Apply theme
+            widget->OnThemeChanged(widgetWindow, m_widgetContext);
+            
+            // Set visibility based on showByDefault
+            if (info.showByDefault) {
+                hasVisibleWidgets = true;
+                widgetWindow->Show();
+            } else {
+                widgetWindow->Hide();
+            }
+        }
+    }
+    
+    // Show sidebar widget container if there are visible widgets
+    if (hasVisibleWidgets) {
+        m_sidebarWidgetContainer->Show();
+        if (!m_leftSplitter->IsSplit()) {
+            m_leftSplitter->SplitHorizontally(m_leftPanel, m_sidebarWidgetContainer);
+            m_leftSplitter->SetSashGravity(0.6);
+            int height = m_leftSplitter->GetSize().GetHeight();
+            m_leftSplitter->SetSashPosition(height * 6 / 10);
+        }
+    }
+    
+    m_sidebarWidgetContainer->Layout();
+}
+
+void MainFrame::ShowSidebarWidget(const wxString& widgetId, bool show)
+{
+    auto it = m_sidebarWidgetWindows.find(widgetId);
+    if (it == m_sidebarWidgetWindows.end()) return;
+    
+    wxWindow* widgetWindow = it->second;
+    if (!widgetWindow) return;
+    
+    if (show) {
+        widgetWindow->Show();
+        if (!m_leftSplitter->IsSplit()) {
+            m_sidebarWidgetContainer->Show();
+            m_leftSplitter->SplitHorizontally(m_leftPanel, m_sidebarWidgetContainer);
+            m_leftSplitter->SetSashGravity(0.6);
+            int height = m_leftSplitter->GetSize().GetHeight();
+            m_leftSplitter->SetSashPosition(height * 6 / 10);
+        }
+    } else {
+        widgetWindow->Hide();
+        
+        // Check if any widgets are still visible
+        bool anyVisible = false;
+        for (const auto& pair : m_sidebarWidgetWindows) {
+            if (pair.second && pair.second->IsShown()) {
+                anyVisible = true;
+                break;
+            }
+        }
+        
+        // Hide container if no widgets visible
+        if (!anyVisible && m_leftSplitter->IsSplit()) {
+            m_leftSplitter->Unsplit(m_sidebarWidgetContainer);
+            m_sidebarWidgetContainer->Hide();
+        }
+    }
+    
+    m_sidebarWidgetContainer->Layout();
+}
+
+void MainFrame::ToggleSidebarWidget(const wxString& widgetId)
+{
+    ShowSidebarWidget(widgetId, !IsSidebarWidgetVisible(widgetId));
+}
+
+bool MainFrame::IsSidebarWidgetVisible(const wxString& widgetId) const
+{
+    auto it = m_sidebarWidgetWindows.find(widgetId);
+    if (it == m_sidebarWidgetWindows.end()) return false;
+    return it->second && it->second->IsShown();
+}
+
 void MainFrame::NotifyThemeChanged()
 {
     // Notify all widgets about theme change
     auto& registry = WidgetRegistry::Instance();
-    auto theme = ThemeManager::Instance().GetCurrentTheme();
     
     for (const auto& widget : registry.GetAllWidgets()) {
-        // Find the widget's window and notify it
-        // (Widgets track their own windows internally)
+        auto it = m_sidebarWidgetWindows.find(widget->GetInfo().id);
+        if (it != m_sidebarWidgetWindows.end() && it->second) {
+            widget->OnThemeChanged(it->second, m_widgetContext);
+        }
     }
 }
 

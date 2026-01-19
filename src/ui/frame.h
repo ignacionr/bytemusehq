@@ -37,6 +37,11 @@ public:
     void ToggleTerminal();
     bool IsTerminalVisible() const;
     
+    // Sidebar widget management (generic)
+    void ShowSidebarWidget(const wxString& widgetId, bool show = true);
+    void ToggleSidebarWidget(const wxString& widgetId);
+    bool IsSidebarWidgetVisible(const wxString& widgetId) const;
+    
     // Widget system access
     WidgetContext& GetWidgetContext() { return m_widgetContext; }
     void NotifyThemeChanged();
@@ -47,12 +52,18 @@ private:
     Terminal* m_terminal;
     wxSplitterWindow* m_rightSplitter; // Vertical splitter for editor/terminal
     wxSplitterWindow* m_hSplitter;     // Horizontal splitter (tree | right)
+    wxSplitterWindow* m_leftSplitter;  // Vertical splitter for tree/sidebar widgets
     wxPanel* m_mainPanel;
     wxPanel* m_leftPanel;
+    wxPanel* m_sidebarWidgetContainer;  // Container for sidebar widgets
     int m_themeListenerId;
     WidgetContext m_widgetContext;
     
+    // Track instantiated sidebar widgets and their windows
+    std::map<wxString, wxWindow*> m_sidebarWidgetWindows;
+    
     void SetupUI();
+    void SetupSidebarWidgets();
     void SetupMenuBar();
     void SetupAccelerators();
     void RegisterCommands();

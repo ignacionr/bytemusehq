@@ -7,11 +7,13 @@
 #include <vector>
 #include <map>
 #include <functional>
+#include <algorithm>
 
 // Forward declarations
 class Widget;
 class WidgetRegistry;
 class WidgetContext;
+class CommandRegistry;
 
 /**
  * Shared pointer type for widgets
@@ -173,6 +175,15 @@ public:
      * @return Vector of command IDs that this widget provides
      */
     virtual std::vector<wxString> GetCommands() const { return {}; }
+
+    /**
+     * Register commands provided by this widget.
+     * Called when the widget is first instantiated.
+     * Override to register widget-specific commands with the CommandRegistry.
+     * 
+     * @param context The widget context providing access to app services
+     */
+    virtual void RegisterCommands(WidgetContext& context) {}
 };
 
 /**
