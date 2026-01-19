@@ -11,6 +11,7 @@
 #include <wx/dir.h>
 #include <wx/filename.h>
 #include <wx/dcbuffer.h>
+#include <wx/graphics.h>
 #include <wx/timer.h>
 #include <wx/listctrl.h>
 #include <wx/hyperlink.h>
@@ -423,18 +424,30 @@ private:
         dc.SetBackground(wxBrush(m_backgroundColor));
         dc.Clear();
         
-        int centerX = size.GetWidth() / 2;
-        int centerY = size.GetHeight() / 2;
-        int radius = std::min(centerX, centerY) - 20;
+        // Use wxGraphicsContext for anti-aliased drawing
+        wxGraphicsContext* gc = wxGraphicsContext::Create(dc);
+        if (!gc) return;
         
-        if (radius < 30) return; // Too small to draw
+        // Enable anti-aliasing
+        gc->SetAntialiasMode(wxANTIALIAS_DEFAULT);
+        
+        double centerX = size.GetWidth() / 2.0;
+        double centerY = size.GetHeight() / 2.0;
+        double radius = std::min(centerX, centerY) - 20.0;
+        
+        if (radius < 30) {
+            delete gc;
+            return; // Too small to draw
+        }
         
         // Draw outer glow ring (subtle)
         wxColour progressColor = GetProgressColor();
         wxColour glowColor(progressColor.Red(), progressColor.Green(), progressColor.Blue(), 30);
-        dc.SetPen(wxPen(glowColor, 12));
-        dc.SetBrush(*wxTRANSPARENT_BRUSH);
-        dc.DrawCircle(centerX, centerY, radius + 5);
+        gc->SetPen(gc->CreatePen(wxGraphicsPenInfo(glowColor).Width(12)));
+        gc->SetBrush(wxNullBrush);
+        wxGraphicsPath glowPath = gc->CreatePath();
+        glowPath.AddCircle(centerX, centerY, radius + 5);
+        gc->StrokePath(glowPath);
         
         // Draw background circle (track)
         wxColour trackColor = m_backgroundColor.IsOk() 
@@ -444,42 +457,37 @@ private:
                 std::min(255, m_backgroundColor.Blue() + 25)
               )
             : wxColour(55, 55, 55);
-        dc.SetPen(wxPen(trackColor, 8));
-        dc.DrawCircle(centerX, centerY, radius);
+        gc->SetPen(gc->CreatePen(wxGraphicsPenInfo(trackColor).Width(8)));
+        wxGraphicsPath trackPath = gc->CreatePath();
+        trackPath.AddCircle(centerX, centerY, radius);
+        gc->StrokePath(trackPath);
         
         // Draw progress arc
         double progress = (double)m_remainingSeconds / m_totalSeconds;
         if (progress > 0) {
-            dc.SetPen(wxPen(progressColor, 8));
+            gc->SetPen(gc->CreatePen(wxGraphicsPenInfo(progressColor).Width(8).Cap(wxCAP_ROUND)));
             
-            // Draw arc segments for smooth appearance
-            int segments = (int)(progress * 100);
-            double startAngle = M_PI / 2; // Start at top (90 degrees)
-            double totalAngle = 2 * M_PI * progress;
+            // Draw arc from top, going clockwise
+            double startAngle = -M_PI / 2; // Start at top
+            double sweepAngle = -2 * M_PI * progress; // Negative for clockwise
             
-            for (int i = 0; i < segments; i++) {
-                double angle1 = startAngle - (totalAngle * i / segments);
-                double angle2 = startAngle - (totalAngle * (i + 1) / segments);
-                
-                int x1 = centerX + (int)(radius * cos(angle1));
-                int y1 = centerY - (int)(radius * sin(angle1));
-                int x2 = centerX + (int)(radius * cos(angle2));
-                int y2 = centerY - (int)(radius * sin(angle2));
-                
-                dc.DrawLine(x1, y1, x2, y2);
-            }
+            wxGraphicsPath arcPath = gc->CreatePath();
+            arcPath.AddArc(centerX, centerY, radius, startAngle, startAngle + sweepAngle, sweepAngle < 0);
+            gc->StrokePath(arcPath);
         }
         
         // Draw center decoration
-        dc.SetPen(*wxTRANSPARENT_PEN);
         wxColour innerColor = m_isRunning ? progressColor : m_foregroundColor;
-        innerColor = wxColour(innerColor.Red(), innerColor.Green(), innerColor.Blue(), 40);
-        dc.SetBrush(wxBrush(wxColour(
+        wxColour blendedInner(
             m_backgroundColor.Red() + (innerColor.Red() - m_backgroundColor.Red()) / 8,
             m_backgroundColor.Green() + (innerColor.Green() - m_backgroundColor.Green()) / 8,
             m_backgroundColor.Blue() + (innerColor.Blue() - m_backgroundColor.Blue()) / 8
-        )));
-        dc.DrawCircle(centerX, centerY, radius - 15);
+        );
+        gc->SetPen(wxNullPen);
+        gc->SetBrush(gc->CreateBrush(wxBrush(blendedInner)));
+        wxGraphicsPath innerPath = gc->CreatePath();
+        innerPath.AddCircle(centerX, centerY, radius - 15);
+        gc->FillPath(innerPath);
         
         // Draw time text
         int minutes = m_remainingSeconds / 60;
@@ -488,35 +496,40 @@ private:
         
         // Large time display
         wxFont timeFont(radius / 3, wxFONTFAMILY_MODERN, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD);
-        dc.SetFont(timeFont);
-        dc.SetTextForeground(progressColor);
+        gc->SetFont(timeFont, progressColor);
         
-        wxSize textSize = dc.GetTextExtent(timeStr);
-        dc.DrawText(timeStr, centerX - textSize.GetWidth() / 2, centerY - textSize.GetHeight() / 2 - 5);
+        double textWidth, textHeight;
+        gc->GetTextExtent(timeStr, &textWidth, &textHeight);
+        gc->DrawText(timeStr, centerX - textWidth / 2, centerY - textHeight / 2 - 5);
         
         // Status text below time
         wxString statusStr = m_isRunning ? "FOCUS" : (m_remainingSeconds == m_totalSeconds ? "READY" : "PAUSED");
         wxFont statusFont(radius / 8, wxFONTFAMILY_SWISS, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
-        dc.SetFont(statusFont);
-        dc.SetTextForeground(wxColour(
+        wxColour statusColor(
             m_foregroundColor.Red(),
             m_foregroundColor.Green(),
             m_foregroundColor.Blue(),
             180
-        ));
+        );
+        gc->SetFont(statusFont, statusColor);
         
-        wxSize statusSize = dc.GetTextExtent(statusStr);
-        dc.DrawText(statusStr, centerX - statusSize.GetWidth() / 2, centerY + textSize.GetHeight() / 2);
+        double statusWidth, statusHeight;
+        gc->GetTextExtent(statusStr, &statusWidth, &statusHeight);
+        gc->DrawText(statusStr, centerX - statusWidth / 2, centerY + textHeight / 2);
         
         // Draw decorative dots at quarter marks
-        dc.SetPen(*wxTRANSPARENT_PEN);
-        dc.SetBrush(wxBrush(trackColor));
+        gc->SetPen(wxNullPen);
+        gc->SetBrush(gc->CreateBrush(wxBrush(trackColor)));
         for (int i = 0; i < 4; i++) {
-            double angle = M_PI / 2 - i * M_PI / 2;
-            int dotX = centerX + (int)((radius + 15) * cos(angle));
-            int dotY = centerY - (int)((radius + 15) * sin(angle));
-            dc.DrawCircle(dotX, dotY, 3);
+            double angle = -M_PI / 2 + i * M_PI / 2;
+            double dotX = centerX + (radius + 15) * cos(angle);
+            double dotY = centerY + (radius + 15) * sin(angle);
+            wxGraphicsPath dotPath = gc->CreatePath();
+            dotPath.AddCircle(dotX, dotY, 3);
+            gc->FillPath(dotPath);
         }
+        
+        delete gc;
     }
 };
 
