@@ -6,6 +6,7 @@
 #include "../config/config.h"
 #include "../commands/command.h"
 #include "../commands/command_registry.h"
+#include "../http/http_client.h"
 #include <wx/dcbuffer.h>
 #include <wx/timer.h>
 #include <wx/listctrl.h>
@@ -17,7 +18,7 @@
 #include <wx/mimetype.h>
 #include <wx/base64.h>
 #include <wx/uri.h>
-#include <curl/curl.h>
+
 #include <thread>
 #include <mutex>
 #include <atomic>
@@ -541,74 +542,54 @@ private:
     std::atomic<bool> m_loading{false};
     wxTimer m_refreshTimer;
     
-    // CURL write callback
-    static size_t WriteCallback(void* contents, size_t size, size_t nmemb, std::string* userp) {
-        size_t totalSize = size * nmemb;
-        userp->append((char*)contents, totalSize);
-        return totalSize;
-    }
-    
     // Result structure for API calls with status info
     struct JiraApiResult {
         std::string response;
         long httpCode = 0;
-        wxString curlError;
+        wxString error;
         bool success = false;
     };
     
-    // Make HTTP request to JIRA API
+    // Make HTTP request to JIRA API using the platform HTTP client
     JiraApiResult MakeJiraRequest(const wxString& endpoint, const wxString& method = "GET", 
                                  const wxString& postData = "") {
         JiraApiResult result;
-        CURL* curl = curl_easy_init();
         
-        if (!curl) {
-            result.curlError = "Failed to initialize CURL";
+        Http::HttpClient& client = Http::getHttpClient();
+        if (!client.isAvailable()) {
+            result.error = wxString::Format("HTTP client (%s) not available", client.backendName());
             return result;
         }
         
         wxString url = m_jiraUrl + endpoint;
         wxString auth = m_jiraUser + ":" + m_jiraToken;
         wxString authEncoded = wxBase64Encode(auth.ToUTF8().data(), auth.ToUTF8().length());
-        wxString authHeader = "Authorization: Basic " + authEncoded;
         
         // Log the request (without sensitive auth header)
-        wxLogDebug("JIRA API Request: %s %s", method, url);
+        wxLogDebug("JIRA API Request: %s %s (via %s)", method, url, client.backendName());
         
-        struct curl_slist* headers = nullptr;
-        headers = curl_slist_append(headers, authHeader.ToUTF8().data());
-        headers = curl_slist_append(headers, "Content-Type: application/json");
-        headers = curl_slist_append(headers, "Accept: application/json");
+        // Build HTTP request
+        Http::HttpRequest req;
+        req.url = std::string(url.ToUTF8().data());
+        req.method = std::string(method.ToUTF8().data());
+        req.headers["Authorization"] = "Basic " + std::string(authEncoded.ToUTF8().data());
+        req.headers["Content-Type"] = "application/json";
+        req.headers["Accept"] = "application/json";
+        req.timeoutSeconds = 30;
         
-        curl_easy_setopt(curl, CURLOPT_URL, url.ToUTF8().data());
-        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &result.response);
-        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
-        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
-        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-        
-        // Enable verbose output for debugging (writes to stderr)
-        #ifdef _DEBUG
-        curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
-        #endif
-        
-        if (method == "POST") {
-            curl_easy_setopt(curl, CURLOPT_POST, 1L);
-            curl_easy_setopt(curl, CURLOPT_POSTFIELDS, postData.ToUTF8().data());
+        if (method == "POST" && !postData.IsEmpty()) {
+            req.body = std::string(postData.ToUTF8().data());
         }
         
-        CURLcode res = curl_easy_perform(curl);
+        Http::HttpResponse httpResult = client.perform(req);
         
-        // Get HTTP response code
-        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &result.httpCode);
+        result.response = httpResult.body;
+        result.httpCode = httpResult.statusCode;
+        result.success = httpResult.success;
         
-        curl_slist_free_all(headers);
-        curl_easy_cleanup(curl);
-        
-        if (res != CURLE_OK) {
-            result.curlError = wxString::Format("CURL error: %s", curl_easy_strerror(res));
-            wxLogError("JIRA API CURL Error: %s", result.curlError);
+        if (!httpResult.error.empty()) {
+            result.error = wxString::FromUTF8(httpResult.error.c_str());
+            wxLogError("JIRA API HTTP Error: %s", result.error);
             return result;
         }
         
@@ -620,7 +601,6 @@ private:
             wxLogWarning("JIRA API Error Response (HTTP %ld): %s", result.httpCode, responsePreview);
         }
         
-        result.success = (result.httpCode >= 200 && result.httpCode < 300);
         return result;
     }
     
@@ -865,8 +845,8 @@ private:
             std::vector<JiraIssue> issues;
             wxString errorMsg;
             
-            if (!result.curlError.IsEmpty()) {
-                errorMsg = result.curlError;
+            if (!result.error.IsEmpty()) {
+                errorMsg = result.error;
             } else if (!result.success) {
                 errorMsg = GetHttpErrorMessage(result.httpCode, result.response);
             } else if (result.response.find("\"errorMessages\"") != std::string::npos) {
@@ -1008,8 +988,8 @@ private:
             wxString newKey;
             wxString errorMsg;
             
-            if (!result.curlError.IsEmpty()) {
-                errorMsg = result.curlError;
+            if (!result.error.IsEmpty()) {
+                errorMsg = result.error;
             } else if (!result.success) {
                 errorMsg = GetHttpErrorMessage(result.httpCode, result.response);
             } else if (result.response.find("\"key\"") != std::string::npos) {

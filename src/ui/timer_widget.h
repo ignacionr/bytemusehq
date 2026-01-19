@@ -323,6 +323,12 @@ public:
         m_updateTimer.Bind(wxEVT_TIMER, &TimerWidget::OnUpdateUI, this);
         m_updateTimer.Start(500);
         
+        // Stop timer when panel is destroyed to prevent accessing deleted objects
+        m_panel->Bind(wxEVT_DESTROY, [this](wxWindowDestroyEvent& evt) {
+            m_updateTimer.Stop();
+            evt.Skip();
+        });
+        
         return m_panel;
     }
 

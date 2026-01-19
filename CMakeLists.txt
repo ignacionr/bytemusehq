@@ -14,8 +14,16 @@ set(wxWidgets_USE_STATIC ON)
 find_package(wxWidgets REQUIRED core base stc)
 include(${wxWidgets_USE_FILE})
 
-# Find CURL for JIRA API
-find_package(CURL REQUIRED)
+# HTTP client configuration
+# On Windows, use WinHTTP (built-in). On other platforms, use CURL.
+if(WIN32)
+  message(STATUS "Windows detected - using WinHTTP for HTTP client")
+  set(USE_WINHTTP ON)
+else()
+  find_package(CURL REQUIRED)
+  message(STATUS "CURL found - using CURL for HTTP client")
+  set(USE_CURL ON)
+endif()
 
 # Source files
 set(SOURCES
@@ -26,6 +34,7 @@ set(SOURCES
     src/commands/command_palette.cpp
     src/config/config.cpp
     src/theme/theme.cpp
+    src/http/http_client.cpp
 )
 
 set(HEADERS
@@ -40,13 +49,23 @@ set(HEADERS
     src/commands/builtin_commands.h
     src/config/config.h
     src/theme/theme.h
+    src/http/http_client.h
 )
 
 # Create executable
 add_executable(${PROJECT_NAME} WIN32 ${SOURCES} ${HEADERS})
 
-# Link wxWidgets and CURL libraries
-target_link_libraries(${PROJECT_NAME} ${wxWidgets_LIBRARIES} CURL::libcurl)
+# Link wxWidgets libraries
+target_link_libraries(${PROJECT_NAME} ${wxWidgets_LIBRARIES})
+
+# Link HTTP backend
+if(USE_CURL)
+  target_link_libraries(${PROJECT_NAME} CURL::libcurl)
+endif()
+
+if(USE_WINHTTP)
+  target_link_libraries(${PROJECT_NAME} winhttp)
+endif()
 
 # Set static linking options for Windows
 if(WIN32 AND MSVC)
