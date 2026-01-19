@@ -9,6 +9,7 @@
 #include <windows.h>
 #include <winhttp.h>
 #include <sstream>
+#include <vector>
 
 #pragma comment(lib, "winhttp.lib")
 
