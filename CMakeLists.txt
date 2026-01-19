@@ -14,6 +14,9 @@ set(wxWidgets_USE_STATIC ON)
 find_package(wxWidgets REQUIRED core base stc)
 include(${wxWidgets_USE_FILE})
 
+# Find CURL for JIRA API
+find_package(CURL REQUIRED)
+
 # Source files
 set(SOURCES
     src/main.cpp
@@ -42,8 +45,8 @@ set(HEADERS
 # Create executable
 add_executable(${PROJECT_NAME} WIN32 ${SOURCES} ${HEADERS})
 
-# Link wxWidgets libraries
-target_link_libraries(${PROJECT_NAME} ${wxWidgets_LIBRARIES})
+# Link wxWidgets and CURL libraries
+target_link_libraries(${PROJECT_NAME} ${wxWidgets_LIBRARIES} CURL::libcurl)
 
 # Set static linking options for Windows
 if(WIN32 AND MSVC)

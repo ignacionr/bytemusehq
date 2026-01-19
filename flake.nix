@@ -25,6 +25,7 @@
 
           buildInputs = with pkgs; [
             wxGTK32
+            curl
           ];
 
           cmakeFlags = [ ];
@@ -41,6 +42,7 @@
             cmake
             pkg-config
             wxGTK32
+            curl
             gcc
             gdb
             clang-tools

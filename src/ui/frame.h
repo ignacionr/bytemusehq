@@ -4,6 +4,7 @@
 #include <wx/wx.h>
 #include <wx/treectrl.h>
 #include <wx/splitter.h>
+#include <set>
 #include "editor.h"
 #include "terminal.h"
 #include "widget.h"
@@ -61,9 +62,12 @@ private:
     
     // Track instantiated sidebar widgets and their windows
     std::map<wxString, wxWindow*> m_sidebarWidgetWindows;
+    std::vector<wxSplitterWindow*> m_sidebarSplitters;  // Splitters for resizable widgets
+    std::set<wxString> m_visibleSidebarWidgets;  // Track which widgets should be visible
     
     void SetupUI();
     void SetupSidebarWidgets();
+    void RebuildSidebarLayout();  // Rebuild splitter layout based on visible widgets
     void SetupMenuBar();
     void SetupAccelerators();
     void RegisterCommands();
