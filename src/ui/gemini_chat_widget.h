@@ -41,23 +41,11 @@ public:
     {
         SetBackgroundStyle(wxBG_STYLE_PAINT);
         
-        // Calculate minimum height based on text
-        wxClientDC dc(this);
-        dc.SetFont(GetFont());
-        int lineHeight = dc.GetCharHeight();
-        int width = 280; // Approximate bubble width
-        
-        wxArrayInt widths;
-        wxString wrapped = WrapText(text, width - 20, dc);
-        int lines = 1;
-        for (size_t i = 0; i < wrapped.Length(); ++i) {
-            if (wrapped[i] == '\n') lines++;
-        }
-        
-        int height = std::max(36, lines * lineHeight + 20);
-        SetMinSize(wxSize(-1, height));
+        // Initial height calculation will be done on first size event
+        SetMinSize(wxSize(-1, 36));
         
         Bind(wxEVT_PAINT, &ChatMessageBubble::OnPaint, this);
+        Bind(wxEVT_SIZE, &ChatMessageBubble::OnSize, this);
     }
     
     void SetThemeColors(const wxColour& bg, const wxColour& fg) {
@@ -68,22 +56,7 @@ public:
     
     void SetText(const wxString& text) {
         m_text = text;
-        
-        // Recalculate height
-        wxClientDC dc(this);
-        dc.SetFont(GetFont());
-        int lineHeight = dc.GetCharHeight();
-        int width = 280;
-        
-        wxString wrapped = WrapText(m_text, width - 20, dc);
-        int lines = 1;
-        for (size_t i = 0; i < wrapped.Length(); ++i) {
-            if (wrapped[i] == '\n') lines++;
-        }
-        
-        int height = std::max(36, lines * lineHeight + 20);
-        SetMinSize(wxSize(-1, height));
-        
+        RecalculateHeight();
         GetParent()->Layout();
         Refresh();
     }
@@ -94,6 +67,38 @@ private:
     bool m_isError;
     wxColour m_bgColor = wxColour(30, 30, 30);
     wxColour m_fgColor = wxColour(220, 220, 220);
+    int m_lastWidth = 0;
+    
+    void RecalculateHeight() {
+        wxClientDC dc(this);
+        dc.SetFont(GetFont());
+        int lineHeight = dc.GetCharHeight();
+        int width = GetClientSize().GetWidth();
+        if (width <= 0) width = 280; // Fallback
+        
+        int bubbleWidth = width - 20; // Account for margins
+        wxString wrapped = WrapText(m_text, bubbleWidth - 20, dc);
+        int lines = 1;
+        for (size_t i = 0; i < wrapped.Length(); ++i) {
+            if (wrapped[i] == '\n') lines++;
+        }
+        
+        int height = std::max(36, lines * lineHeight + 20);
+        SetMinSize(wxSize(-1, height));
+    }
+    
+    void OnSize(wxSizeEvent& event) {
+        int newWidth = event.GetSize().GetWidth();
+        if (newWidth != m_lastWidth && newWidth > 0) {
+            m_lastWidth = newWidth;
+            RecalculateHeight();
+            // Request parent to re-layout since our min height may have changed
+            if (GetParent()) {
+                GetParent()->Layout();
+            }
+        }
+        event.Skip();
+    }
     
     wxString WrapText(const wxString& text, int maxWidth, wxDC& dc) {
         wxString result;
@@ -289,6 +294,9 @@ public:
         m_modelChoice->Bind(wxEVT_CHOICE, &GeminiChatWidget::OnModelChanged, this);
         m_inputText->Bind(wxEVT_TEXT_ENTER, &GeminiChatWidget::OnSendMessage, this);
         m_inputText->Bind(wxEVT_KEY_DOWN, &GeminiChatWidget::OnKeyDown, this);
+        
+        // Bind resize event to recalculate bubble heights when splitter changes
+        m_chatPanel->Bind(wxEVT_SIZE, &GeminiChatWidget::OnChatPanelResize, this);
         
         // Timer for checking async responses
         m_responseTimer.Bind(wxEVT_TIMER, &GeminiChatWidget::OnResponseTimer, this);
@@ -591,6 +599,16 @@ private:
         wxString model = m_modelChoice->GetStringSelection();
         AI::GeminiClient::Instance().SetModel(model.ToStdString());
         AI::GeminiClient::Instance().SaveToConfig();
+    }
+    
+    void OnChatPanelResize(wxSizeEvent& event) {
+        // When the chat panel resizes (e.g., from splitter drag), 
+        // trigger layout to let bubbles recalculate their heights
+        if (m_chatPanel) {
+            m_chatPanel->Layout();
+            m_chatPanel->FitInside();
+        }
+        event.Skip();
     }
 };
 
