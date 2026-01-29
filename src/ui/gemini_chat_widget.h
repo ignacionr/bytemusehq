@@ -36,7 +36,44 @@ class MainFrame;
 namespace BuiltinWidgets {
 
 /**
- * Custom panel for displaying a single chat message bubble.
+ * Represents a single styled word for rendering.
+ */
+struct StyledWord {
+    wxString text;
+    bool bold = false;
+    bool italic = false;
+    bool code = false;
+    bool header = false;
+    int headerLevel = 0;
+    bool isSpace = false;
+};
+
+/**
+ * Represents a span of styled text within a line.
+ */
+struct TextSpan {
+    wxString text;
+    bool bold = false;
+    bool italic = false;
+    bool code = false;
+    bool header = false;
+    int headerLevel = 0;
+};
+
+/**
+ * Represents a parsed line with styling information.
+ */
+struct ParsedLine {
+    std::vector<TextSpan> spans;
+    bool isCodeBlock = false;
+    bool isBulletList = false;
+    bool isNumberedList = false;
+    int listNumber = 0;
+    int indentLevel = 0;
+};
+
+/**
+ * Custom panel for displaying a single chat message bubble with markdown support.
  */
 class ChatMessageBubble : public wxPanel {
 public:
@@ -47,6 +84,9 @@ public:
         , m_isError(isError)
     {
         SetBackgroundStyle(wxBG_STYLE_PAINT);
+        
+        // Parse markdown on construction
+        ParseMarkdown();
         
         // Initial height calculation will be done on first size event
         SetMinSize(wxSize(-1, 36));
@@ -64,6 +104,7 @@ public:
     
     void SetText(const wxString& text) {
         m_text = text;
+        ParseMarkdown();
         RecalculateHeight();
         GetParent()->Layout();
         Refresh();
@@ -95,22 +136,351 @@ private:
     wxColour m_bgColor = wxColour(30, 30, 30);
     wxColour m_fgColor = wxColour(220, 220, 220);
     int m_lastWidth = 0;
+    std::vector<ParsedLine> m_parsedLines;
+    bool m_inCodeBlock = false;
+    
+    /**
+     * Parse inline markdown formatting (bold, italic, code) within a line.
+     */
+    std::vector<TextSpan> ParseInlineMarkdown(const wxString& text, bool isHeader = false, int headerLevel = 0) {
+        std::vector<TextSpan> spans;
+        wxString current;
+        bool inBold = false;
+        bool inItalic = false;
+        bool inCode = false;
+        
+        size_t i = 0;
+        while (i < text.Length()) {
+            // Check for inline code (backtick)
+            if (text[i] == '`' && !inCode) {
+                if (!current.IsEmpty()) {
+                    TextSpan span;
+                    span.text = current;
+                    span.bold = inBold;
+                    span.italic = inItalic;
+                    span.header = isHeader;
+                    span.headerLevel = headerLevel;
+                    spans.push_back(span);
+                    current.Clear();
+                }
+                inCode = true;
+                i++;
+                continue;
+            }
+            if (text[i] == '`' && inCode) {
+                TextSpan span;
+                span.text = current;
+                span.code = true;
+                span.header = isHeader;
+                span.headerLevel = headerLevel;
+                spans.push_back(span);
+                current.Clear();
+                inCode = false;
+                i++;
+                continue;
+            }
+            
+            // Check for bold (**text**)
+            if (!inCode && i + 1 < text.Length() && text[i] == '*' && text[i+1] == '*') {
+                if (!current.IsEmpty()) {
+                    TextSpan span;
+                    span.text = current;
+                    span.bold = inBold;
+                    span.italic = inItalic;
+                    span.header = isHeader;
+                    span.headerLevel = headerLevel;
+                    spans.push_back(span);
+                    current.Clear();
+                }
+                inBold = !inBold;
+                i += 2;
+                continue;
+            }
+            
+            // Check for italic (*text* or _text_) - but not ** which is bold
+            if (!inCode && (text[i] == '*' || text[i] == '_')) {
+                bool isBoldMarker = (i + 1 < text.Length() && text[i+1] == text[i]);
+                if (!isBoldMarker) {
+                    if (!current.IsEmpty()) {
+                        TextSpan span;
+                        span.text = current;
+                        span.bold = inBold;
+                        span.italic = inItalic;
+                        span.header = isHeader;
+                        span.headerLevel = headerLevel;
+                        spans.push_back(span);
+                        current.Clear();
+                    }
+                    inItalic = !inItalic;
+                    i++;
+                    continue;
+                }
+            }
+            
+            current += text[i];
+            i++;
+        }
+        
+        // Add remaining text
+        if (!current.IsEmpty()) {
+            TextSpan span;
+            span.text = current;
+            span.bold = inBold;
+            span.italic = inItalic;
+            span.code = inCode;
+            span.header = isHeader;
+            span.headerLevel = headerLevel;
+            spans.push_back(span);
+        }
+        
+        // If no spans were created, add an empty one
+        if (spans.empty()) {
+            TextSpan span;
+            span.text = "";
+            spans.push_back(span);
+        }
+        
+        return spans;
+    }
+    
+    /**
+     * Parse the entire text into lines with markdown formatting.
+     */
+    void ParseMarkdown() {
+        m_parsedLines.clear();
+        m_inCodeBlock = false;
+        
+        wxStringTokenizer tokenizer(m_text, "\n", wxTOKEN_RET_EMPTY);
+        
+        while (tokenizer.HasMoreTokens()) {
+            wxString line = tokenizer.GetNextToken();
+            ParsedLine parsedLine;
+            
+            // Check for code block start/end
+            if (line.StartsWith("```")) {
+                m_inCodeBlock = !m_inCodeBlock;
+                if (m_inCodeBlock) {
+                    // Starting a code block - this line might have a language specifier
+                    parsedLine.isCodeBlock = true;
+                    TextSpan span;
+                    span.text = line.Mid(3).Trim(); // Language identifier if any
+                    span.code = true;
+                    parsedLine.spans.push_back(span);
+                } else {
+                    // Ending a code block
+                    parsedLine.isCodeBlock = true;
+                    TextSpan span;
+                    span.text = "";
+                    span.code = true;
+                    parsedLine.spans.push_back(span);
+                }
+                m_parsedLines.push_back(parsedLine);
+                continue;
+            }
+            
+            // If we're inside a code block, treat as literal code
+            if (m_inCodeBlock) {
+                parsedLine.isCodeBlock = true;
+                TextSpan span;
+                span.text = line;
+                span.code = true;
+                parsedLine.spans.push_back(span);
+                m_parsedLines.push_back(parsedLine);
+                continue;
+            }
+            
+            // Check for headers
+            int headerLevel = 0;
+            if (line.StartsWith("### ")) {
+                headerLevel = 3;
+                line = line.Mid(4);
+            } else if (line.StartsWith("## ")) {
+                headerLevel = 2;
+                line = line.Mid(3);
+            } else if (line.StartsWith("# ")) {
+                headerLevel = 1;
+                line = line.Mid(2);
+            }
+            
+            // Check for bullet lists
+            wxString trimmedLine = line;
+            int indent = 0;
+            while (trimmedLine.StartsWith("  ")) {
+                indent++;
+                trimmedLine = trimmedLine.Mid(2);
+            }
+            
+            if (trimmedLine.StartsWith("- ") || trimmedLine.StartsWith("* ")) {
+                parsedLine.isBulletList = true;
+                parsedLine.indentLevel = indent;
+                line = trimmedLine.Mid(2);
+            }
+            // Check for numbered lists
+            else if (trimmedLine.Length() > 2) {
+                size_t dotPos = trimmedLine.find('.');
+                if (dotPos != wxString::npos && dotPos < 4) {
+                    wxString numStr = trimmedLine.Left(dotPos);
+                    long num;
+                    if (numStr.ToLong(&num) && num > 0 && num < 100) {
+                        if (trimmedLine.Length() > dotPos + 1 && trimmedLine[dotPos + 1] == ' ') {
+                            parsedLine.isNumberedList = true;
+                            parsedLine.listNumber = static_cast<int>(num);
+                            parsedLine.indentLevel = indent;
+                            line = trimmedLine.Mid(dotPos + 2);
+                        }
+                    }
+                }
+            }
+            
+            // Parse inline formatting
+            parsedLine.spans = ParseInlineMarkdown(line, headerLevel > 0, headerLevel);
+            m_parsedLines.push_back(parsedLine);
+        }
+    }
     
     void RecalculateHeight() {
         wxClientDC dc(this);
-        dc.SetFont(GetFont());
-        int lineHeight = dc.GetCharHeight();
+        wxFont baseFont = GetFont();
+        dc.SetFont(baseFont);
+        int baseLineHeight = dc.GetCharHeight();
         int width = GetClientSize().GetWidth();
         if (width <= 0) width = 280; // Fallback
         
         int bubbleWidth = width - 20; // Account for margins
-        wxString wrapped = WrapText(m_text, bubbleWidth - 20, dc);
-        int lines = 1;
-        for (size_t i = 0; i < wrapped.Length(); ++i) {
-            if (wrapped[i] == '\n') lines++;
+        int contentWidth = bubbleWidth - 20;
+        
+        // Create fonts for measurement
+        wxFont boldFont = baseFont;
+        boldFont.SetWeight(wxFONTWEIGHT_BOLD);
+        wxFont italicFont = baseFont;
+        italicFont.SetStyle(wxFONTSTYLE_ITALIC);
+        wxFont boldItalicFont = boldFont;
+        boldItalicFont.SetStyle(wxFONTSTYLE_ITALIC);
+        wxFont codeFont(baseFont.GetPointSize(), wxFONTFAMILY_TELETYPE, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
+        wxFont h1Font = baseFont;
+        h1Font.SetPointSize(baseFont.GetPointSize() + 4);
+        h1Font.SetWeight(wxFONTWEIGHT_BOLD);
+        wxFont h2Font = baseFont;
+        h2Font.SetPointSize(baseFont.GetPointSize() + 2);
+        h2Font.SetWeight(wxFONTWEIGHT_BOLD);
+        wxFont h3Font = baseFont;
+        h3Font.SetPointSize(baseFont.GetPointSize() + 1);
+        h3Font.SetWeight(wxFONTWEIGHT_BOLD);
+        
+        int totalHeight = 0;
+        
+        for (const auto& line : m_parsedLines) {
+            int lineHeight = baseLineHeight;
+            
+            // Headers are taller
+            if (!line.spans.empty() && line.spans[0].header) {
+                int level = line.spans[0].headerLevel;
+                if (level == 1) lineHeight = baseLineHeight * 3 / 2;
+                else if (level == 2) lineHeight = baseLineHeight * 5 / 4;
+                else lineHeight = baseLineHeight * 9 / 8;
+            }
+            
+            // Code blocks
+            if (line.isCodeBlock) {
+                if (!line.spans.empty() && !line.spans[0].text.IsEmpty()) {
+                    totalHeight += lineHeight + 2;
+                } else {
+                    totalHeight += 4;
+                }
+                continue;
+            }
+            
+            // Build word list for this line and calculate with proper fonts
+            std::vector<StyledWord> words;
+            for (const auto& span : line.spans) {
+                if (span.text.IsEmpty()) continue;
+                
+                wxString currentWord;
+                for (size_t i = 0; i < span.text.Length(); ++i) {
+                    wxChar c = span.text[i];
+                    if (c == ' ') {
+                        if (!currentWord.IsEmpty()) {
+                            StyledWord sw;
+                            sw.text = currentWord;
+                            sw.bold = span.bold;
+                            sw.italic = span.italic;
+                            sw.code = span.code;
+                            sw.header = span.header;
+                            sw.headerLevel = span.headerLevel;
+                            words.push_back(sw);
+                            currentWord.Clear();
+                        }
+                        StyledWord space;
+                        space.text = " ";
+                        space.isSpace = true;
+                        space.code = span.code;
+                        words.push_back(space);
+                    } else {
+                        currentWord += c;
+                    }
+                }
+                if (!currentWord.IsEmpty()) {
+                    StyledWord sw;
+                    sw.text = currentWord;
+                    sw.bold = span.bold;
+                    sw.italic = span.italic;
+                    sw.code = span.code;
+                    sw.header = span.header;
+                    sw.headerLevel = span.headerLevel;
+                    words.push_back(sw);
+                }
+            }
+            
+            // Calculate number of visual lines by simulating wrapping
+            int baseX = 0;
+            if (line.isBulletList || line.isNumberedList) {
+                baseX = 15 + (line.indentLevel * 15);
+            }
+            int maxX = contentWidth;
+            int x = baseX;
+            int lineCount = 1;
+            
+            for (size_t wi = 0; wi < words.size(); ++wi) {
+                const auto& word = words[wi];
+                
+                // Set font for width calculation
+                if (word.header) {
+                    if (word.headerLevel == 1) dc.SetFont(h1Font);
+                    else if (word.headerLevel == 2) dc.SetFont(h2Font);
+                    else dc.SetFont(h3Font);
+                } else if (word.code) {
+                    dc.SetFont(codeFont);
+                } else if (word.bold && word.italic) {
+                    dc.SetFont(boldItalicFont);
+                } else if (word.bold) {
+                    dc.SetFont(boldFont);
+                } else if (word.italic) {
+                    dc.SetFont(italicFont);
+                } else {
+                    dc.SetFont(baseFont);
+                }
+                
+                wxSize wordExtent = dc.GetTextExtent(word.text);
+                
+                if (!word.isSpace && x + wordExtent.GetWidth() > maxX && x > baseX) {
+                    lineCount++;
+                    x = baseX;
+                }
+                
+                if (!(word.isSpace && x == baseX)) {
+                    x += wordExtent.GetWidth();
+                }
+            }
+            
+            totalHeight += lineCount * lineHeight;
+            
+            // Add extra spacing after headers
+            if (!line.spans.empty() && line.spans[0].header) {
+                totalHeight += 4;
+            }
         }
         
-        int height = std::max(36, lines * lineHeight + 20);
+        int height = std::max(36, totalHeight + 28); // 28 for padding + role label
         SetMinSize(wxSize(-1, height));
     }
     
@@ -127,13 +497,13 @@ private:
         event.Skip();
     }
     
-    wxString WrapText(const wxString& text, int maxWidth, wxDC& dc) {
+    wxString WrapTextSimple(const wxString& text, int maxWidth, wxDC& dc) {
         wxString result;
         wxString line;
         wxString word;
         
         for (size_t i = 0; i <= text.Length(); ++i) {
-            char c = (i < text.Length()) ? static_cast<char>(text[i].GetValue()) : ' ';
+            wxChar c = (i < text.Length()) ? text[i].GetValue() : static_cast<wxChar>(' ');
             
             if (c == ' ' || c == '\n' || i == text.Length()) {
                 wxString testLine = line.IsEmpty() ? word : line + " " + word;
@@ -179,13 +549,19 @@ private:
         // Bubble colors
         wxColour bubbleBg;
         wxColour bubbleFg;
+        wxColour codeBg;
+        wxColour codeFg;
         
         if (m_isError) {
             bubbleBg = wxColour(120, 40, 40);
             bubbleFg = wxColour(255, 180, 180);
+            codeBg = wxColour(100, 30, 30);
+            codeFg = wxColour(255, 200, 150);
         } else if (m_isUser) {
             bubbleBg = wxColour(59, 130, 246); // Blue for user
             bubbleFg = wxColour(255, 255, 255);
+            codeBg = wxColour(49, 110, 200);
+            codeFg = wxColour(255, 255, 200);
         } else {
             // Model response - adapt to theme
             bubbleBg = wxColour(
@@ -194,28 +570,203 @@ private:
                 std::min(255, m_bgColor.Blue() + 25)
             );
             bubbleFg = m_fgColor;
+            codeBg = wxColour(
+                std::max(0, m_bgColor.Red() - 10),
+                std::max(0, m_bgColor.Green() - 10),
+                std::max(0, m_bgColor.Blue() - 10)
+            );
+            codeFg = wxColour(220, 180, 100); // Warm code color
         }
         
         // Draw bubble
         int bubbleWidth = size.GetWidth() - 20;
-        int bubbleX = m_isUser ? 10 : 10;
+        int bubbleX = 10;
         
         dc.SetBrush(wxBrush(bubbleBg));
         dc.DrawRoundedRectangle(bubbleX, 4, bubbleWidth, size.GetHeight() - 8, 10);
         
-        // Draw text
-        dc.SetFont(GetFont());
-        dc.SetTextForeground(bubbleFg);
+        // Draw markdown content
+        wxFont baseFont = GetFont();
+        wxFont boldFont = baseFont;
+        boldFont.SetWeight(wxFONTWEIGHT_BOLD);
+        wxFont italicFont = baseFont;
+        italicFont.SetStyle(wxFONTSTYLE_ITALIC);
+        wxFont boldItalicFont = boldFont;
+        boldItalicFont.SetStyle(wxFONTSTYLE_ITALIC);
+        wxFont codeFont(baseFont.GetPointSize(), wxFONTFAMILY_TELETYPE, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
+        wxFont h1Font = baseFont;
+        h1Font.SetPointSize(baseFont.GetPointSize() + 4);
+        h1Font.SetWeight(wxFONTWEIGHT_BOLD);
+        wxFont h2Font = baseFont;
+        h2Font.SetPointSize(baseFont.GetPointSize() + 2);
+        h2Font.SetWeight(wxFONTWEIGHT_BOLD);
+        wxFont h3Font = baseFont;
+        h3Font.SetPointSize(baseFont.GetPointSize() + 1);
+        h3Font.SetWeight(wxFONTWEIGHT_BOLD);
         
-        wxString wrapped = WrapText(m_text, bubbleWidth - 20, dc);
         int y = 10;
-        int x = bubbleX + 10;
+        int baseX = bubbleX + 10;
+        int contentWidth = bubbleWidth - 20;
+        int baseLineHeight = dc.GetCharHeight();
         
-        wxStringTokenizer tokenizer(wrapped, "\n");
-        while (tokenizer.HasMoreTokens()) {
-            wxString line = tokenizer.GetNextToken();
-            dc.DrawText(line, x, y);
-            y += dc.GetCharHeight();
+        for (const auto& line : m_parsedLines) {
+            int x = baseX;
+            int lineHeight = baseLineHeight;
+            
+            // Handle list indentation
+            if (line.isBulletList || line.isNumberedList) {
+                x += line.indentLevel * 15;
+                dc.SetFont(baseFont);
+                dc.SetTextForeground(bubbleFg);
+                if (line.isBulletList) {
+                    dc.DrawText(wxT("\u2022"), x, y); // Bullet point
+                } else {
+                    dc.DrawText(wxString::Format("%d.", line.listNumber), x, y);
+                }
+                x += 15;
+            }
+            
+            // Code block handling
+            if (line.isCodeBlock && !line.spans.empty() && !line.spans[0].text.IsEmpty()) {
+                dc.SetBrush(wxBrush(codeBg));
+                dc.SetPen(*wxTRANSPARENT_PEN);
+                dc.DrawRectangle(baseX, y - 2, contentWidth, baseLineHeight + 4);
+                dc.SetFont(codeFont);
+                dc.SetTextForeground(codeFg);
+                dc.DrawText(line.spans[0].text, baseX + 5, y);
+                y += lineHeight + 2;
+                continue;
+            } else if (line.isCodeBlock) {
+                // Empty code block line (start/end marker)
+                y += 4;
+                continue;
+            }
+            
+            // Render each span in the line
+            // First, build a list of styled words from all spans
+            std::vector<StyledWord> words;
+            for (const auto& span : line.spans) {
+                if (span.text.IsEmpty()) continue;
+                
+                // Split span text into words, preserving spaces
+                wxString currentWord;
+                for (size_t i = 0; i < span.text.Length(); ++i) {
+                    wxChar c = span.text[i];
+                    if (c == ' ') {
+                        if (!currentWord.IsEmpty()) {
+                            StyledWord sw;
+                            sw.text = currentWord;
+                            sw.bold = span.bold;
+                            sw.italic = span.italic;
+                            sw.code = span.code;
+                            sw.header = span.header;
+                            sw.headerLevel = span.headerLevel;
+                            words.push_back(sw);
+                            currentWord.Clear();
+                        }
+                        // Add space as its own word
+                        StyledWord space;
+                        space.text = " ";
+                        space.isSpace = true;
+                        space.bold = span.bold;
+                        space.italic = span.italic;
+                        space.code = span.code;
+                        space.header = span.header;
+                        space.headerLevel = span.headerLevel;
+                        words.push_back(space);
+                    } else {
+                        currentWord += c;
+                    }
+                }
+                if (!currentWord.IsEmpty()) {
+                    StyledWord sw;
+                    sw.text = currentWord;
+                    sw.bold = span.bold;
+                    sw.italic = span.italic;
+                    sw.code = span.code;
+                    sw.header = span.header;
+                    sw.headerLevel = span.headerLevel;
+                    words.push_back(sw);
+                }
+            }
+            
+            // Helper lambda to set font for a styled word
+            auto setFontForWord = [&](const StyledWord& word) {
+                if (word.header) {
+                    if (word.headerLevel == 1) {
+                        dc.SetFont(h1Font);
+                        lineHeight = h1Font.GetPointSize() + 8;
+                    } else if (word.headerLevel == 2) {
+                        dc.SetFont(h2Font);
+                        lineHeight = h2Font.GetPointSize() + 6;
+                    } else {
+                        dc.SetFont(h3Font);
+                        lineHeight = h3Font.GetPointSize() + 4;
+                    }
+                } else if (word.code) {
+                    dc.SetFont(codeFont);
+                } else if (word.bold && word.italic) {
+                    dc.SetFont(boldItalicFont);
+                } else if (word.bold) {
+                    dc.SetFont(boldFont);
+                } else if (word.italic) {
+                    dc.SetFont(italicFont);
+                } else {
+                    dc.SetFont(baseFont);
+                }
+            };
+            
+            // Calculate the maximum x position before wrapping
+            int maxX = baseX + contentWidth;
+            if (line.isBulletList || line.isNumberedList) {
+                // Account for list marker space
+            }
+            
+            // Render words with proper wrapping
+            for (size_t wi = 0; wi < words.size(); ++wi) {
+                const auto& word = words[wi];
+                
+                setFontForWord(word);
+                wxSize wordExtent = dc.GetTextExtent(word.text);
+                
+                // Check if we need to wrap (skip wrapping for leading spaces on new line)
+                if (!word.isSpace && x + wordExtent.GetWidth() > maxX && x > baseX + (line.isBulletList || line.isNumberedList ? 15 + line.indentLevel * 15 : 0)) {
+                    // Wrap to next line
+                    y += lineHeight;
+                    x = baseX;
+                    if (line.isBulletList || line.isNumberedList) {
+                        x += 15 + (line.indentLevel * 15);
+                    }
+                }
+                
+                // Skip leading spaces at the start of a wrapped line
+                if (word.isSpace && x == baseX + (line.isBulletList || line.isNumberedList ? 15 + line.indentLevel * 15 : 0)) {
+                    continue;
+                }
+                
+                // Set colors and draw
+                if (word.code) {
+                    dc.SetTextForeground(codeFg);
+                    if (!word.isSpace) {
+                        // Draw code background
+                        dc.SetBrush(wxBrush(codeBg));
+                        dc.SetPen(*wxTRANSPARENT_PEN);
+                        dc.DrawRoundedRectangle(x - 2, y - 1, wordExtent.GetWidth() + 4, wordExtent.GetHeight() + 2, 3);
+                    }
+                } else {
+                    dc.SetTextForeground(bubbleFg);
+                }
+                
+                dc.DrawText(word.text, x, y);
+                x += wordExtent.GetWidth();
+            }
+            
+            y += lineHeight;
+            
+            // Extra spacing after headers
+            if (!line.spans.empty() && line.spans[0].header) {
+                y += 4;
+            }
         }
         
         // Role indicator (small label)
