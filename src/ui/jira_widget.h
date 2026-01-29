@@ -550,6 +550,7 @@ private:
     wxString m_jiraUser;
     wxString m_jiraToken;
     wxString m_jiraProject;
+    wxString m_jiraApiVersion;  // "2" for Jira Server, "3" for Jira Cloud
     
     std::vector<JiraIssue> m_issues;
     std::atomic<bool> m_loading{false};
@@ -796,6 +797,7 @@ private:
         m_jiraUser = config.GetString("jira.user", "");
         m_jiraToken = config.GetString("jira.apiToken", "");
         m_jiraProject = config.GetString("jira.defaultProject", "");
+        m_jiraApiVersion = config.GetString("jira.apiVersion", "2");  // Default to v2 for Jira Server compatibility
         
         // Update status label
         if (m_jiraUser.IsEmpty() || m_jiraToken.IsEmpty() || m_jiraUrl.IsEmpty()) {
@@ -849,9 +851,17 @@ private:
         
         // Fetch in background thread
         std::thread([this]() {
-            // JQL to get issues assigned to current user (JIRA API v3)
-            wxString endpoint = "/rest/api/3/search/jql?jql=assignee%3DcurrentUser()%20ORDER%20BY%20updated%20DESC"
-                "&fields=key,summary,status,priority,issuetype,assignee,updated&maxResults=50";
+            // JQL to get issues assigned to current user
+            // API v2 (Jira Server): /rest/api/2/search?jql=...
+            // API v3 (Jira Cloud):  /rest/api/3/search/jql?jql=...
+            wxString endpoint;
+            if (m_jiraApiVersion == "3") {
+                endpoint = "/rest/api/3/search/jql?jql=assignee%3DcurrentUser()%20ORDER%20BY%20updated%20DESC"
+                    "&fields=key,summary,status,priority,issuetype,assignee,updated&maxResults=50";
+            } else {
+                endpoint = "/rest/api/2/search?jql=assignee%3DcurrentUser()%20ORDER%20BY%20updated%20DESC"
+                    "&fields=key,summary,status,priority,issuetype,assignee,updated&maxResults=50";
+            }
             
             JiraApiResult result = MakeJiraRequest(endpoint);
             
@@ -994,9 +1004,10 @@ private:
         m_submitBtn->Disable();
         m_submitBtn->SetLabel("Creating...");
         
-        // Create issue in background thread (JIRA API v3)
-        std::thread([this, jsonPayload, summary]() {
-            JiraApiResult result = MakeJiraRequest("/rest/api/3/issue", "POST", jsonPayload);
+        // Create issue in background thread
+        wxString createEndpoint = wxString::Format("/rest/api/%s/issue", m_jiraApiVersion);
+        std::thread([this, jsonPayload, summary, createEndpoint]() {
+            JiraApiResult result = MakeJiraRequest(createEndpoint, "POST", jsonPayload);
             
             wxString newKey;
             wxString errorMsg;
