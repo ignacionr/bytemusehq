@@ -21,6 +21,8 @@
 #include <wx/wrapsizer.h>
 #include <wx/richtext/richtextctrl.h>
 #include <wx/tokenzr.h>
+#include <wx/clipbrd.h>
+#include <wx/menu.h>
 
 #include <thread>
 #include <mutex>
@@ -50,6 +52,7 @@ public:
         
         Bind(wxEVT_PAINT, &ChatMessageBubble::OnPaint, this);
         Bind(wxEVT_SIZE, &ChatMessageBubble::OnSize, this);
+        Bind(wxEVT_RIGHT_DOWN, &ChatMessageBubble::OnRightClick, this);
     }
     
     void SetThemeColors(const wxColour& bg, const wxColour& fg) {
@@ -63,6 +66,25 @@ public:
         RecalculateHeight();
         GetParent()->Layout();
         Refresh();
+    }
+    
+    wxString GetText() const {
+        return m_text;
+    }
+    
+private:
+    void OnRightClick(wxMouseEvent& event) {
+        wxMenu menu;
+        menu.Append(wxID_COPY, "Copy");
+        
+        menu.Bind(wxEVT_MENU, [this](wxCommandEvent&) {
+            if (wxTheClipboard->Open()) {
+                wxTheClipboard->SetData(new wxTextDataObject(m_text));
+                wxTheClipboard->Close();
+            }
+        }, wxID_COPY);
+        
+        PopupMenu(&menu, event.GetPosition());
     }
     
 private:
