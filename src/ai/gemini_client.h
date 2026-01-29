@@ -62,10 +62,23 @@ struct GeminiResponse {
 };
 
 /**
- * Configuration for Gemini API calls.
+ * AI provider type - determines API format and authentication method.
+ */
+enum class AIProvider {
+    Gemini,     // Google Gemini API (key in URL parameter)
+    Cortex      // Cortex/OpenAI-compatible API (Bearer token header)
+};
+
+/**
+ * Configuration for AI API calls.
  */
 struct GeminiConfig {
+    // Provider settings
+    AIProvider provider = AIProvider::Gemini;
+    std::string baseUrl;        // Custom base URL (empty = use default for provider)
     std::string apiKey;
+    
+    // Model settings
     std::string model = "gemini-1.5-flash";
     float temperature = 0.7f;
     int maxOutputTokens = 2048;
@@ -77,9 +90,37 @@ struct GeminiConfig {
     bool enableMCP = true;      // Enable MCP tool calling
     int maxToolCalls = 5;       // Maximum tool calls per response
     
-    // Safety settings - block thresholds
+    // Safety settings - block thresholds (Gemini only)
     // Options: BLOCK_NONE, BLOCK_ONLY_HIGH, BLOCK_MEDIUM_AND_ABOVE, BLOCK_LOW_AND_ABOVE
     std::string safetyThreshold = "BLOCK_MEDIUM_AND_ABOVE";
+    
+    // Get the effective base URL for the current provider
+    std::string getEffectiveBaseUrl() const {
+        if (!baseUrl.empty()) return baseUrl;
+        switch (provider) {
+            case AIProvider::Gemini:
+                return "https://generativelanguage.googleapis.com/v1beta";
+            case AIProvider::Cortex:
+                return ""; // Must be configured
+            default:
+                return "";
+        }
+    }
+    
+    // Get provider name as string
+    std::string providerName() const {
+        switch (provider) {
+            case AIProvider::Gemini: return "gemini";
+            case AIProvider::Cortex: return "cortex";
+            default: return "unknown";
+        }
+    }
+    
+    // Parse provider from string
+    static AIProvider parseProvider(const std::string& name) {
+        if (name == "cortex") return AIProvider::Cortex;
+        return AIProvider::Gemini; // Default
+    }
 };
 
 /**
@@ -150,6 +191,38 @@ public:
     }
     
     /**
+     * Set the AI provider (Gemini or Cortex).
+     */
+    void SetProvider(AIProvider provider) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_config.provider = provider;
+    }
+    
+    /**
+     * Get the current AI provider.
+     */
+    AIProvider GetProvider() const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_config.provider;
+    }
+    
+    /**
+     * Set custom base URL (for Cortex or custom endpoints).
+     */
+    void SetBaseUrl(const std::string& url) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_config.baseUrl = url;
+    }
+    
+    /**
+     * Get the current base URL.
+     */
+    std::string GetBaseUrl() const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_config.baseUrl;
+    }
+    
+    /**
      * Set the model to use (e.g., "gemini-1.5-flash", "gemini-1.5-pro").
      */
     void SetModel(const std::string& model) {
@@ -212,11 +285,31 @@ public:
         auto& cfg = Config::Instance();
         std::lock_guard<std::mutex> lock(m_mutex);
         
-        m_config.apiKey = cfg.GetString("ai.gemini.apiKey", "").ToStdString();
-        m_config.model = cfg.GetString("ai.gemini.model", "gemini-1.5-flash").ToStdString();
-        m_config.temperature = static_cast<float>(cfg.GetDouble("ai.gemini.temperature", 0.7));
-        m_config.maxOutputTokens = cfg.GetInt("ai.gemini.maxOutputTokens", 2048);
-        m_config.systemInstruction = cfg.GetString("ai.gemini.systemInstruction", "").ToStdString();
+        // Load provider settings
+        std::string providerStr = cfg.GetString("ai.provider", "gemini").ToStdString();
+        m_config.provider = GeminiConfig::parseProvider(providerStr);
+        m_config.baseUrl = cfg.GetString("ai.baseUrl", "").ToStdString();
+        m_config.apiKey = cfg.GetString("ai.apiKey", "").ToStdString();
+        
+        // Fallback to legacy gemini-specific key if new key not set
+        if (m_config.apiKey.empty()) {
+            m_config.apiKey = cfg.GetString("ai.gemini.apiKey", "").ToStdString();
+        }
+        
+        // Load model settings (with provider-specific defaults)
+        std::string defaultModel = (m_config.provider == AIProvider::Cortex) 
+            ? "gpt-4" : "gemini-1.5-flash";
+        m_config.model = cfg.GetString("ai.model", wxString(defaultModel)).ToStdString();
+        
+        // Fallback to legacy key
+        if (m_config.model == defaultModel) {
+            std::string legacyModel = cfg.GetString("ai.gemini.model", "").ToStdString();
+            if (!legacyModel.empty()) m_config.model = legacyModel;
+        }
+        
+        m_config.temperature = static_cast<float>(cfg.GetDouble("ai.temperature", 0.7));
+        m_config.maxOutputTokens = cfg.GetInt("ai.maxOutputTokens", 2048);
+        m_config.systemInstruction = cfg.GetString("ai.systemInstruction", "").ToStdString();
     }
     
     /**
@@ -226,11 +319,13 @@ public:
         auto& cfg = Config::Instance();
         std::lock_guard<std::mutex> lock(m_mutex);
         
-        cfg.Set("ai.gemini.apiKey", wxString(m_config.apiKey));
-        cfg.Set("ai.gemini.model", wxString(m_config.model));
-        cfg.Set("ai.gemini.temperature", static_cast<double>(m_config.temperature));
-        cfg.Set("ai.gemini.maxOutputTokens", m_config.maxOutputTokens);
-        cfg.Set("ai.gemini.systemInstruction", wxString(m_config.systemInstruction));
+        cfg.Set("ai.provider", wxString(m_config.providerName()));
+        cfg.Set("ai.baseUrl", wxString(m_config.baseUrl));
+        cfg.Set("ai.apiKey", wxString(m_config.apiKey));
+        cfg.Set("ai.model", wxString(m_config.model));
+        cfg.Set("ai.temperature", static_cast<double>(m_config.temperature));
+        cfg.Set("ai.maxOutputTokens", m_config.maxOutputTokens);
+        cfg.Set("ai.systemInstruction", wxString(m_config.systemInstruction));
         cfg.Save();
     }
     
@@ -382,17 +477,86 @@ public:
     // ========== Available Models ==========
     
     /**
-     * Get list of available Gemini models.
+     * Fetch available models from the API for the current provider.
+     * Returns cached fallback list if API call fails.
      */
-    static std::vector<std::string> GetAvailableModels() {
-        return {
-            "gemini-3-pro-preview",    // Best for complex logic & math
-            "gemini-3-flash-preview",  // Best for agentic coding & speed (Recommended)
-            "gemini-2.5-pro",          // Stable thinking model
-            "gemini-2.5-flash",        // Stable performance model
-            "gemini-2.5-flash-lite"    // Most cost-efficient for small tasks
-        };
+    std::vector<std::string> FetchAvailableModels() {
+        GeminiConfig config;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            config = m_config;
+        }
+        
+        // Need API key to fetch models
+        if (config.apiKey.empty()) {
+            return GetFallbackModels(config.provider);
+        }
+        
+        // For Cortex, also need base URL
+        if (config.provider == AIProvider::Cortex && config.baseUrl.empty()) {
+            return GetFallbackModels(config.provider);
+        }
+        
+        Http::HttpClient& httpClient = Http::getHttpClient();
+        if (!httpClient.isAvailable()) {
+            return GetFallbackModels(config.provider);
+        }
+        
+        Http::HttpRequest request;
+        request.method = "GET";
+        request.timeoutSeconds = 10;
+        
+        if (config.provider == AIProvider::Cortex) {
+            request.url = config.baseUrl + "/v1/models";
+            request.headers["Authorization"] = "Bearer " + config.apiKey;
+        } else {
+            request.url = config.getEffectiveBaseUrl() + "/models?key=" + config.apiKey;
+        }
+        
+        Http::HttpResponse response = httpClient.perform(request);
+        
+        if (!response.error.empty() || response.statusCode != 200) {
+            return GetFallbackModels(config.provider);
+        }
+        
+        // Parse models from response
+        std::vector<std::string> models;
+        if (config.provider == AIProvider::Cortex) {
+            models = ParseCortexModelsResponse(response.body);
+        } else {
+            models = ParseGeminiModelsResponse(response.body);
+        }
+        
+        // Return fallback if parsing failed
+        if (models.empty()) {
+            return GetFallbackModels(config.provider);
+        }
+        
+        return models;
     }
+    
+    /**
+     * Get fallback/default models for a provider (used when API is unavailable).
+     */
+    static std::vector<std::string> GetFallbackModels(AIProvider provider) {
+        switch (provider) {
+            case AIProvider::Gemini:
+                return {
+                    "gemini-2.5-flash",        // Stable performance model
+                    "gemini-2.5-pro",          // Stable thinking model
+                    "gemini-2.0-flash"         // Previous gen flash
+                };
+            case AIProvider::Cortex:
+                return {
+                    "gpt-4",           // Most capable
+                    "gpt-4-turbo",     // Faster GPT-4
+                    "gpt-3.5-turbo"    // Fast and economical
+                };
+            default:
+                return {};
+        }
+    }
+    
 private:
     GeminiClient() {
         LoadFromConfig();
@@ -403,6 +567,81 @@ private:
     mutable std::mutex m_mutex;
     GeminiConfig m_config;
     std::vector<ChatMessage> m_conversationHistory;
+    
+    /**
+     * Parse Gemini models list response.
+     * Response format: { "models": [{ "name": "models/gemini-...", ... }, ...] }
+     */
+    std::vector<std::string> ParseGeminiModelsResponse(const std::string& body) const {
+        std::vector<std::string> models;
+        
+        // Find all model names - looking for "name": "models/..."
+        size_t pos = 0;
+        while ((pos = body.find("\"name\"", pos)) != std::string::npos) {
+            size_t colonPos = body.find(":", pos);
+            if (colonPos == std::string::npos) break;
+            
+            size_t quoteStart = body.find("\"", colonPos + 1);
+            if (quoteStart == std::string::npos) break;
+            
+            size_t quoteEnd = body.find("\"", quoteStart + 1);
+            if (quoteEnd == std::string::npos) break;
+            
+            std::string fullName = body.substr(quoteStart + 1, quoteEnd - quoteStart - 1);
+            
+            // Extract model name from "models/gemini-xxx" format
+            size_t slashPos = fullName.find("/");
+            std::string modelName = (slashPos != std::string::npos) 
+                ? fullName.substr(slashPos + 1) 
+                : fullName;
+            
+            // Filter for generative models (skip embedding models, etc.)
+            if (modelName.find("gemini") != std::string::npos && 
+                modelName.find("embedding") == std::string::npos) {
+                models.push_back(modelName);
+            }
+            
+            pos = quoteEnd + 1;
+        }
+        
+        return models;
+    }
+    
+    /**
+     * Parse Cortex/OpenAI models list response.
+     * Response format: { "data": [{ "id": "gpt-4", ... }, ...] }
+     */
+    std::vector<std::string> ParseCortexModelsResponse(const std::string& body) const {
+        std::vector<std::string> models;
+        
+        // Find the "data" array
+        size_t dataPos = body.find("\"data\"");
+        if (dataPos == std::string::npos) return models;
+        
+        // Find all model IDs within the data array
+        size_t pos = dataPos;
+        while ((pos = body.find("\"id\"", pos)) != std::string::npos) {
+            size_t colonPos = body.find(":", pos);
+            if (colonPos == std::string::npos) break;
+            
+            size_t quoteStart = body.find("\"", colonPos + 1);
+            if (quoteStart == std::string::npos) break;
+            
+            size_t quoteEnd = body.find("\"", quoteStart + 1);
+            if (quoteEnd == std::string::npos) break;
+            
+            std::string modelId = body.substr(quoteStart + 1, quoteEnd - quoteStart - 1);
+            
+            // Add all models (Cortex may expose various models)
+            if (!modelId.empty()) {
+                models.push_back(modelId);
+            }
+            
+            pos = quoteEnd + 1;
+        }
+        
+        return models;
+    }
     
     /**
      * Build the API endpoint URL.
@@ -498,6 +737,136 @@ private:
         
         json += "}";
         return json;
+    }
+    
+    /**
+     * Build the request JSON body for Cortex/OpenAI-compatible API.
+     */
+    std::string BuildCortexRequestBody(const std::vector<ChatMessage>& messages, 
+                                       const GeminiConfig& config) const {
+        std::string json = "{";
+        
+        // Model
+        json += "\"model\":\"" + config.model + "\",";
+        
+        // Messages array (OpenAI format)
+        json += "\"messages\":[";
+        bool first = true;
+        
+        // Add system instruction as first message if set
+        if (!config.systemInstruction.empty()) {
+            json += "{\"role\":\"system\",\"content\":\"" + EscapeJson(config.systemInstruction) + "\"}";
+            first = false;
+        }
+        
+        // Add conversation messages
+        for (const auto& msg : messages) {
+            if (!first) json += ",";
+            first = false;
+            
+            std::string role;
+            switch (msg.role) {
+                case MessageRole::User: role = "user"; break;
+                case MessageRole::Model: role = "assistant"; break;
+                case MessageRole::System: role = "system"; break;
+            }
+            
+            json += "{\"role\":\"" + role + "\",\"content\":\"" + EscapeJson(msg.content) + "\"}";
+        }
+        json += "],";
+        
+        // Generation parameters
+        json += "\"temperature\":" + std::to_string(config.temperature) + ",";
+        json += "\"max_tokens\":" + std::to_string(config.maxOutputTokens);
+        
+        // Optional: add tools if MCP is enabled (OpenAI function calling format)
+        // For now, we skip MCP tools for Cortex as the format differs significantly
+        
+        json += "}";
+        return json;
+    }
+    
+    /**
+     * Parse the response JSON from Cortex/OpenAI-compatible API.
+     */
+    GeminiResponse ParseCortexResponse(const std::string& responseBody, long httpCode) const {
+        GeminiResponse result;
+        result.httpCode = httpCode;
+        
+        // Check for error response
+        size_t errorPos = responseBody.find("\"error\"");
+        if (errorPos != std::string::npos) {
+            size_t msgStart = responseBody.find("\"message\"", errorPos);
+            if (msgStart != std::string::npos) {
+                msgStart = responseBody.find("\"", msgStart + 9) + 1;
+                size_t msgEnd = responseBody.find("\"", msgStart);
+                if (msgEnd != std::string::npos) {
+                    result.error = responseBody.substr(msgStart, msgEnd - msgStart);
+                }
+            }
+            if (result.error.empty()) {
+                result.error = "API returned an error (HTTP " + std::to_string(httpCode) + ")";
+            }
+            return result;
+        }
+        
+        // OpenAI format: choices[0].message.content
+        size_t choicesPos = responseBody.find("\"choices\"");
+        if (choicesPos == std::string::npos) {
+            result.error = "Invalid response format: no choices found";
+            return result;
+        }
+        
+        // Find message content
+        size_t messagePos = responseBody.find("\"message\"", choicesPos);
+        if (messagePos == std::string::npos) {
+            result.error = "Invalid response format: no message found";
+            return result;
+        }
+        
+        size_t contentPos = responseBody.find("\"content\"", messagePos);
+        if (contentPos == std::string::npos) {
+            result.error = "Invalid response format: no content found";
+            return result;
+        }
+        
+        // Extract content value
+        size_t textStart = responseBody.find("\"", contentPos + 9) + 1;
+        size_t textEnd = textStart;
+        
+        // Handle escaped quotes in the text
+        while (textEnd < responseBody.size()) {
+            if (responseBody[textEnd] == '\\') {
+                textEnd += 2; // Skip escaped character
+                continue;
+            }
+            if (responseBody[textEnd] == '"') {
+                break;
+            }
+            textEnd++;
+        }
+        
+        std::string text = responseBody.substr(textStart, textEnd - textStart);
+        result.text = UnescapeJson(text);
+        result.success = true;
+        
+        // Try to extract token usage
+        size_t usagePos = responseBody.find("\"usage\"");
+        if (usagePos != std::string::npos) {
+            size_t promptPos = responseBody.find("\"prompt_tokens\"", usagePos);
+            if (promptPos != std::string::npos) {
+                size_t numStart = responseBody.find(":", promptPos) + 1;
+                result.promptTokens = std::atoi(responseBody.c_str() + numStart);
+            }
+            
+            size_t completionPos = responseBody.find("\"completion_tokens\"", usagePos);
+            if (completionPos != std::string::npos) {
+                size_t numStart = responseBody.find(":", completionPos) + 1;
+                result.completionTokens = std::atoi(responseBody.c_str() + numStart);
+            }
+        }
+        
+        return result;
     }
     
     /**
@@ -676,7 +1045,13 @@ private:
         
         // Validate API key
         if (config.apiKey.empty()) {
-            result.error = "API key not configured. Set ai.gemini.apiKey in config.";
+            result.error = "API key not configured. Set ai.apiKey in config.";
+            return result;
+        }
+        
+        // Validate base URL for Cortex
+        if (config.provider == AIProvider::Cortex && config.baseUrl.empty()) {
+            result.error = "Base URL not configured. Set ai.baseUrl in config for Cortex.";
             return result;
         }
         
@@ -687,18 +1062,23 @@ private:
             return result;
         }
         
-        // Build request
-        std::string endpoint = "https://generativelanguage.googleapis.com/v1beta/models/" 
-                              + config.model + ":generateContent?key=" + config.apiKey;
-        std::string body = BuildRequestBody(messages);
-        
-        // Make HTTP request
+        // Build request based on provider
         Http::HttpRequest request;
-        request.url = endpoint;
         request.method = "POST";
-        request.body = body;
         request.headers["Content-Type"] = "application/json";
         request.timeoutSeconds = 60; // AI requests can take a while
+        
+        if (config.provider == AIProvider::Cortex) {
+            // Cortex/OpenAI-compatible API
+            request.url = config.baseUrl + "/v1/chat/completions";
+            request.headers["Authorization"] = "Bearer " + config.apiKey;
+            request.body = BuildCortexRequestBody(messages, config);
+        } else {
+            // Google Gemini API
+            std::string baseUrl = config.getEffectiveBaseUrl();
+            request.url = baseUrl + "/models/" + config.model + ":generateContent?key=" + config.apiKey;
+            request.body = BuildRequestBody(messages);
+        }
         
         Http::HttpResponse httpResponse = httpClient.perform(request);
         
@@ -708,7 +1088,10 @@ private:
             return result;
         }
         
-        // Parse and return response
+        // Parse response based on provider
+        if (config.provider == AIProvider::Cortex) {
+            return ParseCortexResponse(httpResponse.body, httpResponse.statusCode);
+        }
         return ParseResponse(httpResponse.body, httpResponse.statusCode);
     }
 };

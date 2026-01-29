@@ -195,6 +195,10 @@ private:
     // Ensure config directory exists
     bool EnsureConfigDir();
     
+    // Expand environment variables in a string
+    // Supports ${VAR} and $VAR syntax
+    static wxString ExpandEnvironmentVariables(const wxString& str);
+    
     // Initialize with default values
     void InitializeDefaults();
 };

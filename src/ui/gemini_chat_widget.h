@@ -812,14 +812,24 @@ public:
         m_headerLabel->SetFont(headerFont);
         headerSizer->Add(m_headerLabel, 1, wxALIGN_CENTER_VERTICAL);
         
+        // Provider selector
+        m_providerChoice = new wxChoice(m_panel, wxID_ANY, wxDefaultPosition, wxSize(70, -1));
+        m_providerChoice->Append("Gemini");
+        m_providerChoice->Append("Cortex");
+        m_providerChoice->SetSelection(AI::GeminiClient::Instance().GetProvider() == AI::AIProvider::Cortex ? 1 : 0);
+        m_providerChoice->SetToolTip("Select AI provider");
+        headerSizer->Add(m_providerChoice, 0, wxLEFT | wxALIGN_CENTER_VERTICAL, 5);
+        
         // Model selector
         m_modelChoice = new wxChoice(m_panel, wxID_ANY, wxDefaultPosition, wxSize(100, -1));
-        for (const auto& model : AI::GeminiClient::GetAvailableModels()) {
-            m_modelChoice->Append(wxString(model));
-        }
-        m_modelChoice->SetSelection(0);
-        m_modelChoice->SetToolTip("Select AI model");
+        PopulateModelList(); // Start with fallback, will refresh when dropdown opens
+        m_modelChoice->SetToolTip("Select AI model (click refresh to fetch from API)");
         headerSizer->Add(m_modelChoice, 0, wxLEFT | wxALIGN_CENTER_VERTICAL, 5);
+        
+        // Refresh models button
+        m_refreshModelsBtn = new wxButton(m_panel, wxID_ANY, wxT("\U0001F504"), wxDefaultPosition, wxSize(28, 24)); // 🔄
+        m_refreshModelsBtn->SetToolTip("Refresh available models from API");
+        headerSizer->Add(m_refreshModelsBtn, 0, wxLEFT, 2);
         
         // Clear button
         m_clearBtn = new wxButton(m_panel, wxID_ANY, wxT("\U0001F5D1"), wxDefaultPosition, wxSize(28, 24)); // 🗑
@@ -885,6 +895,8 @@ public:
         // Bind events
         m_sendBtn->Bind(wxEVT_BUTTON, &GeminiChatWidget::OnSendMessage, this);
         m_clearBtn->Bind(wxEVT_BUTTON, &GeminiChatWidget::OnClearChat, this);
+        m_refreshModelsBtn->Bind(wxEVT_BUTTON, &GeminiChatWidget::OnRefreshModels, this);
+        m_providerChoice->Bind(wxEVT_CHOICE, &GeminiChatWidget::OnProviderChanged, this);
         m_modelChoice->Bind(wxEVT_CHOICE, &GeminiChatWidget::OnModelChanged, this);
         m_mcpCheckbox->Bind(wxEVT_CHECKBOX, &GeminiChatWidget::OnMCPToggle, this);
         m_inputText->Bind(wxEVT_TEXT_ENTER, &GeminiChatWidget::OnSendMessage, this);
@@ -903,8 +915,11 @@ public:
         // Initialize MCP filesystem provider
         InitializeMCP();
         
-        // Add welcome message
-        AddMessageBubble("Hello! I'm Gemini, your AI assistant. How can I help you today?", false);
+        // Add welcome message based on provider
+        wxString welcomeMsg = (AI::GeminiClient::Instance().GetProvider() == AI::AIProvider::Cortex)
+            ? "Hello! I'm your AI assistant (via Cortex). How can I help you today?"
+            : "Hello! I'm your AI assistant (via Gemini). How can I help you today?";
+        AddMessageBubble(welcomeMsg, false);
         
         return m_panel;
     }
@@ -1046,9 +1061,11 @@ private:
     wxStaticText* m_statusLabel = nullptr;
     wxStaticText* m_apiKeyWarning = nullptr;
     wxStaticText* m_mcpStatusLabel = nullptr;
+    wxChoice* m_providerChoice = nullptr;
     wxChoice* m_modelChoice = nullptr;
     wxCheckBox* m_mcpCheckbox = nullptr;
     wxButton* m_clearBtn = nullptr;
+    wxButton* m_refreshModelsBtn = nullptr;
     wxButton* m_sendBtn = nullptr;
     wxScrolledWindow* m_chatPanel = nullptr;
     wxBoxSizer* m_chatSizer = nullptr;
@@ -1152,18 +1169,34 @@ private:
     void LoadConfig() {
         AI::GeminiClient::Instance().LoadFromConfig();
         
-        // Set model choice to current model
-        wxString currentModel = wxString(AI::GeminiClient::Instance().GetModel());
-        int idx = m_modelChoice->FindString(currentModel);
-        if (idx != wxNOT_FOUND) {
-            m_modelChoice->SetSelection(idx);
-        }
+        // Set provider choice
+        AI::AIProvider provider = AI::GeminiClient::Instance().GetProvider();
+        m_providerChoice->SetSelection(provider == AI::AIProvider::Cortex ? 1 : 0);
+        
+        // Populate model list for current provider
+        PopulateModelList();
     }
     
     void UpdateApiKeyWarning() {
         bool hasKey = AI::GeminiClient::Instance().HasApiKey();
-        m_apiKeyWarning->Show(!hasKey);
-        m_sendBtn->Enable(hasKey);
+        AI::AIProvider provider = AI::GeminiClient::Instance().GetProvider();
+        
+        // For Cortex, also check if base URL is set
+        bool needsUrl = (provider == AI::AIProvider::Cortex && 
+                        AI::GeminiClient::Instance().GetBaseUrl().empty());
+        
+        if (needsUrl) {
+            m_apiKeyWarning->SetLabel(wxT("\u26A0 Set ai.baseUrl and ai.apiKey in config")); // ⚠
+            m_apiKeyWarning->Show(true);
+            m_sendBtn->Enable(false);
+        } else if (!hasKey) {
+            m_apiKeyWarning->SetLabel(wxT("\u26A0 Set ai.apiKey in config")); // ⚠
+            m_apiKeyWarning->Show(true);
+            m_sendBtn->Enable(false);
+        } else {
+            m_apiKeyWarning->Show(false);
+            m_sendBtn->Enable(true);
+        }
         m_panel->Layout();
     }
     
@@ -1447,6 +1480,77 @@ private:
         wxString model = m_modelChoice->GetStringSelection();
         AI::GeminiClient::Instance().SetModel(model.ToStdString());
         AI::GeminiClient::Instance().SaveToConfig();
+    }
+    
+    void OnProviderChanged(wxCommandEvent& event) {
+        int sel = m_providerChoice->GetSelection();
+        AI::AIProvider provider = (sel == 1) ? AI::AIProvider::Cortex : AI::AIProvider::Gemini;
+        AI::GeminiClient::Instance().SetProvider(provider);
+        
+        // Update model list for new provider
+        PopulateModelList();
+        
+        // Clear conversation when switching providers
+        ClearConversation();
+        
+        // Update API key warning
+        UpdateApiKeyWarning();
+        
+        AI::GeminiClient::Instance().SaveToConfig();
+        
+        // Show helpful message about configuration
+        if (provider == AI::AIProvider::Cortex) {
+            AddMessageBubble(
+                "Switched to Cortex provider. Make sure to set:\n"
+                "- ai.baseUrl: Your Cortex endpoint URL\n"
+                "- ai.apiKey: Your API key\n\n"
+                "These can be configured in ~/.bytemusehq/config.json", 
+                false);
+        } else {
+            AddMessageBubble(
+                "Switched to Gemini provider. Make sure ai.apiKey is set "
+                "to your Google AI API key in config.", 
+                false);
+        }
+    }
+    
+    void PopulateModelList(bool fetchFromApi = false) {
+        if (!m_modelChoice) return;
+        
+        m_modelChoice->Clear();
+        
+        std::vector<std::string> models;
+        if (fetchFromApi) {
+            UpdateStatus("Fetching models...");
+            models = AI::GeminiClient::Instance().FetchAvailableModels();
+            UpdateStatus("");
+        } else {
+            // Use fallback list initially (faster startup)
+            models = AI::GeminiClient::GetFallbackModels(
+                AI::GeminiClient::Instance().GetProvider());
+        }
+        
+        for (const auto& model : models) {
+            m_modelChoice->Append(wxString(model));
+        }
+        
+        // Try to select current model, or first available
+        wxString currentModel = wxString(AI::GeminiClient::Instance().GetModel());
+        int idx = m_modelChoice->FindString(currentModel);
+        if (idx != wxNOT_FOUND) {
+            m_modelChoice->SetSelection(idx);
+        } else if (m_modelChoice->GetCount() > 0) {
+            m_modelChoice->SetSelection(0);
+            AI::GeminiClient::Instance().SetModel(m_modelChoice->GetString(0).ToStdString());
+        }
+    }
+    
+    void RefreshModelList() {
+        PopulateModelList(true);
+    }
+    
+    void OnRefreshModels(wxCommandEvent& event) {
+        RefreshModelList();
     }
     
     void OnMCPToggle(wxCommandEvent& event) {

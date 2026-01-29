@@ -88,10 +88,10 @@ wxString Config::GetString(const wxString& key, const wxString& defaultValue) co
     auto it = m_values.find(key);
     if (it != m_values.end()) {
         if (auto* str = std::get_if<wxString>(&it->second)) {
-            return *str;
+            return ExpandEnvironmentVariables(*str);
         }
     }
-    return defaultValue;
+    return ExpandEnvironmentVariables(defaultValue);
 }
 
 int Config::GetInt(const wxString& key, int defaultValue) const {
@@ -133,12 +133,21 @@ bool Config::GetBool(const wxString& key, bool defaultValue) const {
 std::vector<wxString> Config::GetStringArray(const wxString& key, 
                                               const std::vector<wxString>& defaultValue) const {
     auto it = m_values.find(key);
+    const std::vector<wxString>* source = nullptr;
     if (it != m_values.end()) {
-        if (auto* arr = std::get_if<std::vector<wxString>>(&it->second)) {
-            return *arr;
-        }
+        source = std::get_if<std::vector<wxString>>(&it->second);
     }
-    return defaultValue;
+    if (!source) {
+        source = &defaultValue;
+    }
+    
+    // Expand environment variables in each string
+    std::vector<wxString> result;
+    result.reserve(source->size());
+    for (const auto& str : *source) {
+        result.push_back(ExpandEnvironmentVariables(str));
+    }
+    return result;
 }
 
 bool Config::HasKey(const wxString& key) const {
@@ -246,6 +255,56 @@ static wxString EscapeJsonString(const wxString& str) {
                 result += ch;
         }
     }
+    return result;
+}
+
+// Helper to check if a character is valid in an environment variable name
+static bool IsEnvVarChar(wxUniChar ch) {
+    return (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') ||
+           (ch >= '0' && ch <= '9') || ch == '_';
+}
+
+wxString Config::ExpandEnvironmentVariables(const wxString& str) {
+    wxString result;
+    size_t i = 0;
+    
+    while (i < str.length()) {
+        if (str[i] == '$') {
+            if (i + 1 < str.length() && str[i + 1] == '{') {
+                // ${VAR} syntax
+                size_t start = i + 2;
+                size_t end = str.find('}', start);
+                if (end != wxString::npos) {
+                    wxString varName = str.Mid(start, end - start);
+                    wxString envValue;
+                    if (wxGetEnv(varName, &envValue)) {
+                        result += envValue;
+                    }
+                    // If env var not found, replace with empty string
+                    i = end + 1;
+                    continue;
+                }
+            } else if (i + 1 < str.length() && IsEnvVarChar(str[i + 1])) {
+                // $VAR syntax
+                size_t start = i + 1;
+                size_t end = start;
+                while (end < str.length() && IsEnvVarChar(str[end])) {
+                    end++;
+                }
+                wxString varName = str.Mid(start, end - start);
+                wxString envValue;
+                if (wxGetEnv(varName, &envValue)) {
+                    result += envValue;
+                }
+                // If env var not found, replace with empty string
+                i = end;
+                continue;
+            }
+        }
+        result += str[i];
+        i++;
+    }
+    
     return result;
 }
 
