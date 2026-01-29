@@ -23,12 +23,68 @@
 namespace MCP {
 
 /**
+ * SSH configuration for remote command execution.
+ */
+struct TerminalSshConfig {
+    bool enabled = false;
+    std::string host;
+    int port = 22;
+    std::string user;
+    std::string identityFile;
+    std::string extraOptions;
+    bool forwardAgent = false;
+    int connectionTimeout = 30;
+    
+    /**
+     * Build SSH command prefix for executing a remote command.
+     */
+    std::string buildSshPrefix() const {
+        if (!enabled || host.empty()) return "";
+        
+        std::string cmd = "ssh";
+        
+        if (!extraOptions.empty()) {
+            cmd += " " + extraOptions;
+        }
+        
+        if (forwardAgent) {
+            cmd += " -A";
+        }
+        
+        if (!identityFile.empty()) {
+            cmd += " -i \"" + identityFile + "\"";
+        }
+        
+        if (port != 22) {
+            cmd += " -p " + std::to_string(port);
+        }
+        
+        cmd += " -o ConnectTimeout=" + std::to_string(connectionTimeout);
+        cmd += " -o BatchMode=yes";  // Don't prompt for password
+        
+        if (!user.empty()) {
+            cmd += " " + user + "@" + host;
+        } else {
+            cmd += " " + host;
+        }
+        
+        return cmd;
+    }
+    
+    bool isValid() const {
+        return enabled && !host.empty();
+    }
+};
+
+/**
  * Terminal MCP Provider.
  * 
  * Provides tools for the AI to execute shell commands on the system.
  * Automatically selects the appropriate shell based on the runtime platform:
  * - Windows: cmd.exe or PowerShell
  * - macOS/Linux: bash, zsh, or sh
+ * 
+ * Supports SSH for remote command execution when configured.
  * 
  * Security: Commands are executed in the configured working directory.
  * There are timeouts and output limits to prevent runaway processes.
@@ -89,6 +145,27 @@ public:
      */
     void setMaxOutputSize(size_t bytes) {
         m_maxOutputBytes = bytes;
+    }
+    
+    /**
+     * Configure SSH for remote command execution.
+     */
+    void setSshConfig(const TerminalSshConfig& config) {
+        m_sshConfig = config;
+    }
+    
+    /**
+     * Get current SSH configuration.
+     */
+    TerminalSshConfig getSshConfig() const {
+        return m_sshConfig;
+    }
+    
+    /**
+     * Check if SSH is enabled and configured.
+     */
+    bool isRemoteExecution() const {
+        return m_sshConfig.isValid();
     }
     
     std::vector<ToolDefinition> getTools() const override {
@@ -178,6 +255,7 @@ private:
     std::string m_platform;
     int m_timeoutSeconds = 30;
     size_t m_maxOutputBytes = 100000;  // 100KB max output
+    TerminalSshConfig m_sshConfig;
     
     /**
      * Detect the platform and available shell.
@@ -259,6 +337,7 @@ private:
     /**
      * Execute a shell command and capture its output.
      * Uses popen() which is thread-safe, unlike wxExecute.
+     * Supports SSH for remote command execution.
      */
     std::tuple<int, std::string, std::string> runCommand(
         const std::string& command,
@@ -273,52 +352,91 @@ private:
         std::string shellToUse = shell.empty() ? m_defaultShell : shell;
         std::string effectiveWorkDir = workDir.empty() ? m_workingDirectory : workDir;
         
-        // Build the full command with cd and shell wrapper
         std::string fullCommand;
         
+        // Check if we should execute via SSH
+        if (m_sshConfig.isValid()) {
+            // Build SSH remote command
+            std::string sshPrefix = m_sshConfig.buildSshPrefix();
+            
+            // Escape the command for SSH (double-escape needed)
+            std::string escapedCommand = command;
+            
+            // Escape backslashes first, then quotes
+            size_t pos = 0;
+            while ((pos = escapedCommand.find("\\", pos)) != std::string::npos) {
+                escapedCommand.replace(pos, 1, "\\\\");
+                pos += 2;
+            }
+            pos = 0;
+            while ((pos = escapedCommand.find("\"", pos)) != std::string::npos) {
+                escapedCommand.replace(pos, 1, "\\\"");
+                pos += 2;
+            }
+            pos = 0;
+            while ((pos = escapedCommand.find("$", pos)) != std::string::npos) {
+                escapedCommand.replace(pos, 1, "\\$");
+                pos += 2;
+            }
+            
+            // Build the remote command with optional cd
+            std::string remoteCmd;
+            if (!effectiveWorkDir.empty()) {
+                remoteCmd = "cd \"" + effectiveWorkDir + "\" && " + escapedCommand;
+            } else {
+                remoteCmd = escapedCommand;
+            }
+            
+            // Combine SSH with remote command
+            fullCommand = sshPrefix + " \"" + remoteCmd + "\" 2>&1";
+        } else {
+            // Local command execution (existing logic)
+            // Build the full command with cd and shell wrapper
+        
 #ifdef _WIN32
-        // Windows: use cd /d for changing drive and directory
-        if (shellToUse == "powershell") {
-            // PowerShell command
-            fullCommand = "powershell.exe -NoProfile -NonInteractive -Command \"";
-            if (!effectiveWorkDir.empty()) {
-                fullCommand += "Set-Location '" + effectiveWorkDir + "'; ";
+            // Windows: use cd /d for changing drive and directory
+            if (shellToUse == "powershell") {
+                // PowerShell command
+                fullCommand = "powershell.exe -NoProfile -NonInteractive -Command \"";
+                if (!effectiveWorkDir.empty()) {
+                    fullCommand += "Set-Location '" + effectiveWorkDir + "'; ";
+                }
+                fullCommand += command + "\" 2>&1";
+            } else {
+                // cmd.exe command
+                fullCommand = "cmd.exe /C \"";
+                if (!effectiveWorkDir.empty()) {
+                    fullCommand += "cd /d \"" + effectiveWorkDir + "\" && ";
+                }
+                fullCommand += command + "\" 2>&1";
             }
-            fullCommand += command + "\" 2>&1";
-        } else {
-            // cmd.exe command
-            fullCommand = "cmd.exe /C \"";
-            if (!effectiveWorkDir.empty()) {
-                fullCommand += "cd /d \"" + effectiveWorkDir + "\" && ";
-            }
-            fullCommand += command + "\" 2>&1";
-        }
 #else
-        // Unix: build shell command with cd
-        std::string shellPath;
-        if (shellToUse == "zsh") {
-            shellPath = "/bin/zsh";
-        } else if (shellToUse == "bash") {
-            shellPath = "/bin/bash";
-        } else {
-            shellPath = "/bin/sh";
-        }
-        
-        // Escape single quotes in the command
-        std::string escapedCommand = command;
-        size_t pos = 0;
-        while ((pos = escapedCommand.find("'", pos)) != std::string::npos) {
-            escapedCommand.replace(pos, 1, "'\\''");
-            pos += 4;
-        }
-        
-        // Build command: cd to workdir (if specified) and execute
-        if (!effectiveWorkDir.empty()) {
-            fullCommand = shellPath + " -c 'cd \"" + effectiveWorkDir + "\" && " + escapedCommand + "' 2>&1";
-        } else {
-            fullCommand = shellPath + " -c '" + escapedCommand + "' 2>&1";
-        }
+            // Unix: build shell command with cd
+            std::string shellPath;
+            if (shellToUse == "zsh") {
+                shellPath = "/bin/zsh";
+            } else if (shellToUse == "bash") {
+                shellPath = "/bin/bash";
+            } else {
+                shellPath = "/bin/sh";
+            }
+            
+            // Escape single quotes in the command
+            std::string escapedCommand = command;
+            size_t pos = 0;
+            while ((pos = escapedCommand.find("'", pos)) != std::string::npos) {
+                escapedCommand.replace(pos, 1, "'\\''");
+                pos += 4;
+            }
+            
+            // Build command: cd to workdir (if specified) and execute
+            if (!effectiveWorkDir.empty()) {
+                fullCommand = shellPath + " -c 'cd \"" + effectiveWorkDir + "\" && " + escapedCommand + "' 2>&1";
+            } else {
+                fullCommand = shellPath + " -c '" + escapedCommand + "' 2>&1";
+            }
 #endif
+        }
         
         // Execute using popen (thread-safe)
         FILE* pipe = popen(fullCommand.c_str(), "r");
@@ -416,6 +534,17 @@ private:
         result["platform"] = m_platform;
         result["default_shell"] = m_defaultShell;
         result["working_directory"] = m_workingDirectory;
+        
+        // SSH remote execution info
+        result["remote_execution"] = m_sshConfig.isValid();
+        if (m_sshConfig.isValid()) {
+            Value sshInfo;
+            sshInfo["host"] = m_sshConfig.host;
+            sshInfo["port"] = m_sshConfig.port;
+            sshInfo["user"] = m_sshConfig.user;
+            sshInfo["forward_agent"] = m_sshConfig.forwardAgent;
+            result["ssh"] = sshInfo;
+        }
         
         // List available shells
         Value shells;

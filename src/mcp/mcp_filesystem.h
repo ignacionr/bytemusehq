@@ -13,11 +13,62 @@
 namespace MCP {
 
 /**
+ * SSH configuration for remote filesystem access.
+ */
+struct FilesystemSshConfig {
+    bool enabled = false;
+    std::string host;
+    int port = 22;
+    std::string user;
+    std::string identityFile;
+    std::string extraOptions;
+    int connectionTimeout = 30;
+    
+    /**
+     * Build SSH command prefix for remote operations.
+     */
+    std::string buildSshPrefix() const {
+        if (!enabled || host.empty()) return "";
+        
+        std::string cmd = "ssh";
+        
+        if (!extraOptions.empty()) {
+            cmd += " " + extraOptions;
+        }
+        
+        if (!identityFile.empty()) {
+            cmd += " -i \"" + identityFile + "\"";
+        }
+        
+        if (port != 22) {
+            cmd += " -p " + std::to_string(port);
+        }
+        
+        cmd += " -o ConnectTimeout=" + std::to_string(connectionTimeout);
+        cmd += " -o BatchMode=yes";
+        
+        if (!user.empty()) {
+            cmd += " " + user + "@" + host;
+        } else {
+            cmd += " " + host;
+        }
+        
+        return cmd;
+    }
+    
+    bool isValid() const {
+        return enabled && !host.empty();
+    }
+};
+
+/**
  * Filesystem MCP Provider.
  * 
  * Provides tools for the AI to interact with the filesystem within
  * the currently open workspace/directory. This is designed to be
  * an isolated component that can be integrated with the file explorer widget.
+ * 
+ * Supports both local and remote (SSH) filesystem access.
  * 
  * Security: All operations are sandboxed to the configured root directory.
  * The AI cannot access files outside this directory.
@@ -64,6 +115,27 @@ public:
      */
     std::string getRootPath() const {
         return m_rootPath;
+    }
+    
+    /**
+     * Configure SSH for remote filesystem access.
+     */
+    void setSshConfig(const FilesystemSshConfig& config) {
+        m_sshConfig = config;
+    }
+    
+    /**
+     * Get current SSH configuration.
+     */
+    FilesystemSshConfig getSshConfig() const {
+        return m_sshConfig;
+    }
+    
+    /**
+     * Check if remote filesystem access is enabled.
+     */
+    bool isRemoteFilesystem() const {
+        return m_sshConfig.isValid();
     }
     
     std::vector<ToolDefinition> getTools() const override {
@@ -172,12 +244,72 @@ public:
 
 private:
     std::string m_rootPath;
+    FilesystemSshConfig m_sshConfig;
+    
+    /**
+     * Execute a remote command via SSH and return output.
+     * Used for remote filesystem operations.
+     */
+    std::pair<int, std::string> executeRemoteCommand(const std::string& command) const {
+        if (!m_sshConfig.isValid()) {
+            return {-1, "SSH not configured"};
+        }
+        
+        std::string sshPrefix = m_sshConfig.buildSshPrefix();
+        std::string fullCommand = sshPrefix + " \"" + command + "\" 2>&1";
+        
+        FILE* pipe = popen(fullCommand.c_str(), "r");
+        if (!pipe) {
+            return {-1, "Failed to execute SSH command"};
+        }
+        
+        std::string output;
+        char buffer[4096];
+        while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+            output += buffer;
+        }
+        
+        int status = pclose(pipe);
+        int exitCode = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+        
+        // Remove trailing newline
+        while (!output.empty() && (output.back() == '\n' || output.back() == '\r')) {
+            output.pop_back();
+        }
+        
+        return {exitCode, output};
+    }
+    
+    /**
+     * Resolve a relative path to full path (local or remote).
+     * For remote, just combines paths; for local, validates sandbox.
+     */
+    std::string resolveRemotePath(const std::string& relativePath) const {
+        std::string basePath = m_rootPath;
+        if (relativePath.empty() || relativePath == ".") {
+            return basePath;
+        }
+        
+        // Combine paths, ensuring single separator
+        std::string combined = basePath;
+        if (!combined.empty() && combined.back() != '/') {
+            combined += '/';
+        }
+        combined += relativePath;
+        
+        return combined;
+    }
     
     /**
      * Resolve a relative path to an absolute path within the sandbox.
      * Returns empty string if path escapes the sandbox.
      */
     std::string resolvePath(const std::string& relativePath) const {
+        // For remote filesystems, use simpler path resolution
+        if (m_sshConfig.isValid()) {
+            return resolveRemotePath(relativePath);
+        }
+        
         // Handle the relative path properly - it may contain subdirectories
         wxFileName fn;
         if (relativePath.empty() || relativePath == ".") {
@@ -253,7 +385,30 @@ private:
      */
     bool isValidPath(const std::string& path) const {
         if (path.empty()) return false;
+        
+        // For remote filesystem, check via SSH
+        if (m_sshConfig.isValid()) {
+            auto [exitCode, _] = executeRemoteCommand("test -e \"" + path + "\"");
+            return exitCode == 0;
+        }
+        
         return wxFileExists(path) || wxDirExists(path);
+    }
+    
+    /**
+     * Check if remote path is a directory.
+     */
+    bool isRemoteDirectory(const std::string& path) const {
+        auto [exitCode, _] = executeRemoteCommand("test -d \"" + path + "\"");
+        return exitCode == 0;
+    }
+    
+    /**
+     * Check if remote path is a file.
+     */
+    bool isRemoteFile(const std::string& path) const {
+        auto [exitCode, _] = executeRemoteCommand("test -f \"" + path + "\"");
+        return exitCode == 0;
     }
     
     // ========== Tool Implementations ==========
@@ -268,6 +423,11 @@ private:
             return ToolResult::Error("Invalid path: access denied");
         }
         
+        // Remote filesystem listing
+        if (m_sshConfig.isValid()) {
+            return listDirectoryRemote(fullPath, relPath, recursive, maxDepth);
+        }
+        
         if (!wxDirExists(fullPath)) {
             return ToolResult::Error("Directory not found: " + relPath);
         }
@@ -275,6 +435,69 @@ private:
         Value result;
         result["path"] = relPath;
         result["entries"] = listDirectoryRecursive(fullPath, recursive, maxDepth, 0);
+        
+        return ToolResult::Success(result);
+    }
+    
+    /**
+     * List directory contents on remote machine via SSH.
+     */
+    ToolResult listDirectoryRemote(const std::string& fullPath, const std::string& relPath, 
+                                   bool recursive, int maxDepth) {
+        // Use ls with stat-like output for detailed info
+        std::string lsCmd = "ls -la \"" + fullPath + "\" 2>/dev/null";
+        auto [exitCode, output] = executeRemoteCommand(lsCmd);
+        
+        if (exitCode != 0) {
+            return ToolResult::Error("Directory not found or inaccessible: " + relPath);
+        }
+        
+        Value entries;
+        std::istringstream stream(output);
+        std::string line;
+        
+        while (std::getline(stream, line)) {
+            // Skip total line and empty lines
+            if (line.empty() || line.find("total") == 0) continue;
+            
+            // Parse ls -la output: permissions links owner group size month day time name
+            std::istringstream lineStream(line);
+            std::string permissions, links, owner, group, size, month, day, timeStr, name;
+            lineStream >> permissions >> links >> owner >> group >> size >> month >> day >> timeStr;
+            std::getline(lineStream, name);
+            
+            // Trim leading whitespace from name
+            size_t start = name.find_first_not_of(" \t");
+            if (start != std::string::npos) {
+                name = name.substr(start);
+            }
+            
+            // Skip . and .. and hidden files (unless allowed)
+            if (name.empty() || name == "." || name == "..") continue;
+            if (shouldSkipDotfile(wxString(name))) continue;
+            
+            Value entry;
+            entry["name"] = name;
+            entry["path"] = relPath.empty() || relPath == "." ? name : relPath + "/" + name;
+            
+            if (!permissions.empty() && permissions[0] == 'd') {
+                entry["type"] = "directory";
+            } else {
+                entry["type"] = "file";
+                try {
+                    entry["size"] = std::stod(size);
+                } catch (...) {
+                    entry["size"] = 0.0;
+                }
+            }
+            
+            entries.push_back(entry);
+        }
+        
+        Value result;
+        result["path"] = relPath;
+        result["entries"] = entries;
+        result["remote"] = true;
         
         return ToolResult::Success(result);
     }
@@ -320,6 +543,58 @@ private:
         return entries;
     }
     
+    /**
+     * Read file contents from remote machine via SSH.
+     */
+    ToolResult readFileRemote(const std::string& fullPath, const std::string& relPath, int maxSize) {
+        // First check if file exists and get size
+        auto [statCode, statOut] = executeRemoteCommand("stat -f '%z' \"" + fullPath + "\" 2>/dev/null || stat --format='%s' \"" + fullPath + "\" 2>/dev/null");
+        if (statCode != 0) {
+            return ToolResult::Error("File not found: " + relPath);
+        }
+        
+        long fileSize = 0;
+        try {
+            fileSize = std::stol(statOut);
+        } catch (...) {
+            fileSize = 0;
+        }
+        
+        bool truncated = fileSize > maxSize;
+        
+        // Read file content via cat, with optional head for truncation
+        std::string catCmd;
+        if (truncated) {
+            catCmd = "head -c " + std::to_string(maxSize) + " \"" + fullPath + "\"";
+        } else {
+            catCmd = "cat \"" + fullPath + "\"";
+        }
+        
+        auto [exitCode, content] = executeRemoteCommand(catCmd);
+        if (exitCode != 0) {
+            return ToolResult::Error("Could not read file: " + relPath);
+        }
+        
+        // Check if binary (contains null bytes)
+        bool isBinary = content.find('\0') != std::string::npos;
+        
+        Value result;
+        result["path"] = relPath;
+        result["size"] = static_cast<double>(fileSize);
+        result["truncated"] = truncated;
+        result["remote"] = true;
+        
+        if (isBinary) {
+            result["content"] = "[Binary file - content not displayed]";
+            result["binary"] = true;
+        } else {
+            result["content"] = content;
+            result["binary"] = false;
+        }
+        
+        return ToolResult::Success(result);
+    }
+    
     ToolResult readFile(const Value& args) {
         if (!args.has("path")) {
             return ToolResult::Error("Missing required parameter: path");
@@ -331,6 +606,11 @@ private:
         std::string fullPath = resolvePath(relPath);
         if (fullPath.empty()) {
             return ToolResult::Error("Invalid path: access denied");
+        }
+        
+        // Remote file reading via SSH
+        if (m_sshConfig.isValid()) {
+            return readFileRemote(fullPath, relPath, maxSize);
         }
         
         if (!wxFileExists(fullPath)) {

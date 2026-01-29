@@ -8,8 +8,63 @@
 #include "../theme/theme.h"
 
 /**
+ * SSH connection configuration.
+ * When enabled, the terminal connects to a remote machine via SSH.
+ */
+struct SshConfig {
+    bool enabled = false;
+    wxString host;                          // Hostname or IP
+    int port = 22;                          // SSH port
+    wxString user;                          // SSH username
+    wxString identityFile;                  // Path to private key (optional)
+    wxString remotePath = "~";              // Remote working directory
+    wxString extraOptions;                  // Additional SSH options
+    bool forwardAgent = false;              // SSH agent forwarding
+    int connectionTimeout = 30;             // Connection timeout in seconds
+    
+    // Build the SSH command to connect
+    wxString BuildSshCommand() const {
+        wxString cmd = "ssh";
+        
+        // Add options
+        if (!extraOptions.IsEmpty()) {
+            cmd += " " + extraOptions;
+        }
+        
+        if (forwardAgent) {
+            cmd += " -A";
+        }
+        
+        if (!identityFile.IsEmpty()) {
+            cmd += " -i \"" + identityFile + "\"";
+        }
+        
+        if (port != 22) {
+            cmd += wxString::Format(" -p %d", port);
+        }
+        
+        cmd += wxString::Format(" -o ConnectTimeout=%d", connectionTimeout);
+        
+        // Add user@host
+        if (!user.IsEmpty()) {
+            cmd += " " + user + "@" + host;
+        } else {
+            cmd += " " + host;
+        }
+        
+        return cmd;
+    }
+    
+    // Check if configuration is valid for connection
+    bool IsValid() const {
+        return enabled && !host.IsEmpty();
+    }
+};
+
+/**
  * Terminal component for ByteMuseHQ.
  * Provides a simple command-line interface with a persistent shell session.
+ * Supports both local and remote (SSH) shell sessions.
  */
 class Terminal : public wxPanel {
 public:
@@ -30,14 +85,25 @@ public:
     
     // Theme support
     void ApplyTheme(const ThemePtr& theme);
+    
+    // SSH support
+    void SetSshConfig(const SshConfig& config);
+    SshConfig GetSshConfig() const { return m_sshConfig; }
+    bool IsRemoteSession() const { return m_sshConfig.enabled && m_sshConfig.IsValid(); }
+    
+    // Reconnect (restart shell with current configuration)
+    void Reconnect();
 
 private:
     wxTextCtrl* m_output;       // Output display
     wxTextCtrl* m_input;        // Command input
     wxStaticText* m_label;      // Header label
     wxStaticText* m_prompt;     // Input prompt
-    wxString m_workingDir;      // Current working directory
+    wxString m_workingDir;      // Current working directory (local or remote)
     int m_themeListenerId;
+    
+    // SSH configuration
+    SshConfig m_sshConfig;
     
     // Shell process management
     wxProcess* m_process;

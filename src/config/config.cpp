@@ -24,6 +24,18 @@ void Config::InitializeDefaults() {
     m_values["terminal.fontSize"] = 12;
     m_values["terminal.fontFamily"] = wxString("Menlo");
     
+    // SSH Remote Development defaults
+    // When enabled, terminal, file operations, and code indexing will go through SSH
+    m_values["ssh.enabled"] = false;
+    m_values["ssh.host"] = wxString("");                    // Hostname or IP of remote machine
+    m_values["ssh.port"] = 22;                               // SSH port
+    m_values["ssh.user"] = wxString("");                    // SSH username
+    m_values["ssh.identityFile"] = wxString("");           // Path to SSH private key (optional)
+    m_values["ssh.remotePath"] = wxString("~");            // Default remote working directory
+    m_values["ssh.extraOptions"] = wxString("");           // Additional SSH options (e.g., -o StrictHostKeyChecking=no)
+    m_values["ssh.forwardAgent"] = false;                    // Enable SSH agent forwarding
+    m_values["ssh.connectionTimeout"] = 30;                  // Connection timeout in seconds
+    
     // UI defaults
     m_values["ui.sidebarWidth"] = 250;
     m_values["ui.terminalHeight"] = 200;

@@ -114,6 +114,63 @@ using DiagnosticsCallback = std::function<void(const wxString& uri, const std::v
 using CompletionCallback = std::function<void(const std::vector<LspCompletionItem>& items)>;
 
 // ============================================================================
+// SSH Configuration for Remote LSP
+// ============================================================================
+
+/**
+ * SSH configuration for running language servers on remote machines.
+ * When enabled, the LSP client will run the language server via SSH.
+ */
+struct LspSshConfig {
+    bool enabled = false;
+    std::string host;
+    int port = 22;
+    std::string user;
+    std::string identityFile;
+    std::string extraOptions;
+    int connectionTimeout = 30;
+    
+    /**
+     * Build SSH command prefix for running remote LSP server.
+     */
+    std::string buildSshPrefix() const {
+        if (!enabled || host.empty()) return "";
+        
+        std::string cmd = "ssh";
+        
+        // Use -tt for pseudo-terminal allocation (needed for stdin/stdout)
+        cmd += " -tt";
+        
+        if (!extraOptions.empty()) {
+            cmd += " " + extraOptions;
+        }
+        
+        if (!identityFile.empty()) {
+            cmd += " -i \"" + identityFile + "\"";
+        }
+        
+        if (port != 22) {
+            cmd += " -p " + std::to_string(port);
+        }
+        
+        cmd += " -o ConnectTimeout=" + std::to_string(connectionTimeout);
+        cmd += " -o StrictHostKeyChecking=accept-new";
+        
+        if (!user.empty()) {
+            cmd += " " + user + "@" + host;
+        } else {
+            cmd += " " + host;
+        }
+        
+        return cmd;
+    }
+    
+    bool isValid() const {
+        return enabled && !host.empty();
+    }
+};
+
+// ============================================================================
 // JSON Helper (minimal implementation)
 // ============================================================================
 
@@ -352,6 +409,7 @@ inline JsonValue JsonValue::Parse(const wxString& json) {
 
 /**
  * Client for communicating with Language Server Protocol servers.
+ * Supports both local and remote (SSH) language server execution.
  * 
  * Usage:
  * @code
@@ -360,13 +418,16 @@ inline JsonValue JsonValue::Parse(const wxString& json) {
  *     // Handle diagnostics
  * });
  * 
- * if (client.Start("clangd", "/path/to/project")) {
- *     client.Initialize([](bool success) {
- *         if (success) {
- *             // Server ready
- *         }
- *     });
- * }
+ * // For local development:
+ * if (client.Start("clangd", "/path/to/project")) { ... }
+ * 
+ * // For remote development via SSH:
+ * LspSshConfig ssh;
+ * ssh.enabled = true;
+ * ssh.host = "dev-machine";
+ * ssh.user = "developer";
+ * client.SetSshConfig(ssh);
+ * if (client.Start("clangd", "/home/developer/project")) { ... }
  * @endcode
  */
 class LspClient : public wxEvtHandler {
@@ -378,9 +439,31 @@ public:
     }
     
     /**
+     * Configure SSH for remote language server execution.
+     */
+    void SetSshConfig(const LspSshConfig& config) {
+        m_sshConfig = config;
+    }
+    
+    /**
+     * Get current SSH configuration.
+     */
+    LspSshConfig GetSshConfig() const {
+        return m_sshConfig;
+    }
+    
+    /**
+     * Check if remote execution is enabled.
+     */
+    bool IsRemoteExecution() const {
+        return m_sshConfig.isValid();
+    }
+    
+    /**
      * Start the language server process.
+     * If SSH is configured, runs the server on the remote machine.
      * @param command The server command (e.g., "clangd" or "nix run nixpkgs#clang-tools -- clangd")
-     * @param workspaceRoot The workspace root path
+     * @param workspaceRoot The workspace root path (local path, or remote path if SSH enabled)
      * @return true if the process started successfully
      */
     bool Start(const wxString& command, const wxString& workspaceRoot) {
@@ -394,12 +477,25 @@ public:
         
         // Build the full command with arguments
         wxString fullCommand;
+        wxString lspCommand;
+        
         if (command.Contains("nix run")) {
             // For nix run, --background-index goes after the -- separator
-            // "nix run nixpkgs#clang-tools -- clangd" -> "nix run nixpkgs#clang-tools -- clangd --background-index"
-            fullCommand = command + " --background-index";
+            lspCommand = command + " --background-index";
         } else {
-            fullCommand = command + " --background-index";
+            lspCommand = command + " --background-index";
+        }
+        
+        // If SSH is configured, wrap the command
+        if (m_sshConfig.isValid()) {
+            wxString sshPrefix = wxString(m_sshConfig.buildSshPrefix());
+            // Escape the LSP command for SSH
+            wxString escapedCmd = lspCommand;
+            escapedCmd.Replace("\"", "\\\"");
+            // Change to workspace directory and run the LSP server
+            fullCommand = sshPrefix + " \"cd '" + workspaceRoot + "' && " + escapedCmd + "\"";
+        } else {
+            fullCommand = lspCommand;
         }
         
         long pid = wxExecute(fullCommand, wxEXEC_ASYNC, m_process);
@@ -698,6 +794,7 @@ private:
     bool m_initialized;
     wxTimer m_pollTimer;
     wxString m_inputBuffer;
+    LspSshConfig m_sshConfig;
     
     std::map<int, std::function<void(const JsonValue&)>> m_pendingRequests;
     std::map<wxString, int> m_documentVersions;

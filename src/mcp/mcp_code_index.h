@@ -10,11 +10,28 @@
 namespace MCP {
 
 /**
+ * SSH configuration for remote code indexing.
+ * When enabled, the code index operates on remote files via the LSP server
+ * running over SSH.
+ */
+struct CodeIndexSshConfig {
+    bool enabled = false;
+    std::string host;
+    std::string remotePath;  // Base path on remote machine
+    
+    bool isValid() const {
+        return enabled && !host.empty();
+    }
+};
+
+/**
  * Code Index MCP Provider.
  * 
  * Exposes the workspace code index (symbols from clangd) to the AI.
  * This allows the AI to understand code structure, find definitions,
  * and navigate the codebase intelligently.
+ * 
+ * Supports remote code indexing when the LSP server runs over SSH.
  * 
  * Available tools:
  * - code_search_symbols: Search for symbols by name
@@ -57,6 +74,29 @@ public:
     void setAllSymbolsCallback(AllSymbolsFn fn) { m_allSymbolsFn = fn; }
     void setSymbolsByKindCallback(SymbolsByKindFn fn) { m_symbolsByKindFn = fn; }
     void setIndexStatusCallback(IndexStatusFn fn) { m_indexStatusFn = fn; }
+    
+    /**
+     * Configure SSH for remote code indexing.
+     * Note: The actual LSP server SSH configuration is set on the LspClient.
+     * This config is used for file path resolution in results.
+     */
+    void setSshConfig(const CodeIndexSshConfig& config) {
+        m_sshConfig = config;
+    }
+    
+    /**
+     * Get current SSH configuration.
+     */
+    CodeIndexSshConfig getSshConfig() const {
+        return m_sshConfig;
+    }
+    
+    /**
+     * Check if remote indexing is enabled.
+     */
+    bool isRemoteIndexing() const {
+        return m_sshConfig.isValid();
+    }
     
     std::vector<ToolDefinition> getTools() const override {
         std::vector<ToolDefinition> tools;
@@ -145,6 +185,7 @@ private:
     AllSymbolsFn m_allSymbolsFn;
     SymbolsByKindFn m_symbolsByKindFn;
     IndexStatusFn m_indexStatusFn;
+    CodeIndexSshConfig m_sshConfig;
     
     /**
      * Convert symbol kind to human-readable string.

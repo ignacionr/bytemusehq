@@ -1,10 +1,31 @@
 #include "terminal.h"
+#include "../config/config.h"
 #include <wx/filename.h>
 
 wxBEGIN_EVENT_TABLE(Terminal, wxPanel)
     EVT_END_PROCESS(wxID_ANY, Terminal::OnProcessTerminated)
     EVT_IDLE(Terminal::OnIdle)
 wxEND_EVENT_TABLE()
+
+/**
+ * Load SSH configuration from the global config.
+ */
+static SshConfig LoadSshConfigFromSettings() {
+    auto& config = Config::Instance();
+    SshConfig ssh;
+    
+    ssh.enabled = config.GetBool("ssh.enabled", false);
+    ssh.host = config.GetString("ssh.host", "");
+    ssh.port = config.GetInt("ssh.port", 22);
+    ssh.user = config.GetString("ssh.user", "");
+    ssh.identityFile = config.GetString("ssh.identityFile", "");
+    ssh.remotePath = config.GetString("ssh.remotePath", "~");
+    ssh.extraOptions = config.GetString("ssh.extraOptions", "");
+    ssh.forwardAgent = config.GetBool("ssh.forwardAgent", false);
+    ssh.connectionTimeout = config.GetInt("ssh.connectionTimeout", 30);
+    
+    return ssh;
+}
 
 Terminal::Terminal(wxWindow* parent, wxWindowID id)
     : wxPanel(parent, id)
@@ -21,6 +42,10 @@ Terminal::Terminal(wxWindow* parent, wxWindowID id)
     , m_themeListenerId(0)
 {
     m_workingDir = wxGetCwd();
+    
+    // Load SSH configuration from settings
+    m_sshConfig = LoadSshConfigFromSettings();
+    
     SetupUI();
     ApplyCurrentTheme();
     StartShell();
@@ -146,6 +171,19 @@ wxString Terminal::GetShellCommand()
 #endif
 }
 
+void Terminal::SetSshConfig(const SshConfig& config)
+{
+    m_sshConfig = config;
+}
+
+void Terminal::Reconnect()
+{
+    // Reload SSH config from settings
+    m_sshConfig = LoadSshConfigFromSettings();
+    StopShell();
+    StartShell();
+}
+
 void Terminal::StartShell()
 {
     if (m_process) {
@@ -155,22 +193,30 @@ void Terminal::StartShell()
     m_process = new wxProcess(this);
     m_process->Redirect();
     
-    wxString shell = GetShellCommand();
+    wxString shell;
+    wxString displayMessage;
     
-    // Set environment to be interactive-ish but not fully
+    // Check if we should use SSH
+    if (m_sshConfig.IsValid()) {
+        // Build SSH command
+        shell = m_sshConfig.BuildSshCommand();
+        displayMessage = wxString::Format("Connecting to %s@%s:%d...\n",
+            m_sshConfig.user.IsEmpty() ? wxGetUserId() : m_sshConfig.user,
+            m_sshConfig.host, m_sshConfig.port);
+    } else {
+        // Local shell
+        shell = GetShellCommand();
+        displayMessage = "Shell started: " + shell + "\n";
+    }
+    
+    // Set environment
     wxExecuteEnv env;
     env.cwd = m_workingDir;
     
-#ifdef __WXMSW__
     m_pid = wxExecute(shell, wxEXEC_ASYNC, m_process, &env);
-#else
-    // On Unix, don't use -i flag as it tries to use TTY which we don't have
-    // Use a simpler approach that still processes .profile/.bashrc
-    m_pid = wxExecute(shell, wxEXEC_ASYNC, m_process, &env);
-#endif
     
     if (m_pid == 0) {
-        m_output->AppendText("Failed to start shell: " + shell + "\n");
+        m_output->AppendText("Failed to start: " + shell + "\n");
         delete m_process;
         m_process = nullptr;
         return;
@@ -180,8 +226,17 @@ void Terminal::StartShell()
     m_processOutput = m_process->GetInputStream();
     m_processError = m_process->GetErrorStream();
     
-    m_output->AppendText("Shell started: " + shell + "\n");
-    m_output->AppendText("Working directory: " + m_workingDir + "\n\n");
+    m_output->AppendText(displayMessage);
+    
+    // For SSH, change to the remote working directory
+    if (m_sshConfig.IsValid() && !m_sshConfig.remotePath.IsEmpty()) {
+        m_output->AppendText("Remote directory: " + m_sshConfig.remotePath + "\n\n");
+        // Send cd command after a brief delay for connection establishment
+        wxString cdCmd = "cd " + m_sshConfig.remotePath + "\n";
+        m_processInput->Write(cdCmd.c_str(), cdCmd.length());
+    } else {
+        m_output->AppendText("Working directory: " + m_workingDir + "\n\n");
+    }
 }
 
 void Terminal::StopShell()
