@@ -17,6 +17,16 @@ This guide explains how to extend ByteMuseHQ with custom commands and visual wid
   - [Widget Locations](#widget-locations)
   - [Widget Lifecycle](#widget-lifecycle)
   - [Theme Support](#theme-support)
+  - [Built-in Widgets](#built-in-widgets)
+- [MCP (Model Context Protocol)](#mcp-model-context-protocol)
+  - [MCP Providers](#mcp-providers)
+  - [Available Tools](#available-tools)
+  - [Creating Custom Providers](#creating-custom-providers)
+- [AI Integration](#ai-integration)
+  - [Gemini Client](#gemini-client)
+  - [Function Calling](#function-calling)
+- [LSP Integration](#lsp-integration)
+- [HTTP Client](#http-client)
 - [Registration](#registration)
 - [Examples](#examples)
 
@@ -24,31 +34,34 @@ This guide explains how to extend ByteMuseHQ with custom commands and visual wid
 
 ## Architecture Overview
 
-ByteMuseHQ uses two primary extension points:
+ByteMuseHQ uses several primary extension points:
 
 1. **CommandRegistry** — Manages executable actions accessible via the command palette, menus, and keyboard shortcuts
 2. **WidgetRegistry** — Manages visual UI components that can be placed in the sidebar, editor area, or bottom panel
+3. **MCP Providers** — Model Context Protocol providers that expose tools to AI assistants
+4. **LSP Client** — Language Server Protocol client for code intelligence features
+5. **HTTP Client** — Cross-platform HTTP client for API integrations
 
-Both systems use a registry pattern with singleton access, making it easy to register extensions from anywhere in the codebase.
+All systems use a registry pattern with singleton access, making it easy to register extensions from anywhere in the codebase.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                        MainFrame                            │
 ├─────────────┬───────────────────────────────┬───────────────┤
-│   Sidebar   │          Editor Area          │               │
-│   ┌───────┐ │  ┌─────────────────────────┐  │               │
-│   │Widget │ │  │   EditorWidget          │  │               │
-│   │ (tree)│ │  │                         │  │               │
-│   │       │ │  │   - Syntax highlighting │  │               │
-│   │       │ │  │   - File management     │  │               │
-│   │       │ │  │                         │  │               │
-│   └───────┘ │  └─────────────────────────┘  │               │
-│             ├───────────────────────────────┤               │
-│             │       Panel Area              │               │
-│             │  ┌─────────────────────────┐  │               │
-│             │  │   TerminalWidget        │  │               │
-│             │  │   (or custom widgets)   │  │               │
-│             │  └─────────────────────────┘  │               │
+│   Sidebar   │          Editor Area          │   Activity    │
+│   ┌───────┐ │  ┌─────────────────────────┐  │   Bar        │
+│   │File   │ │  │   EditorWidget          │  │   ┌───────┐   │
+│   │Tree   │ │  │   - Syntax highlighting │  │   │ Files │   │
+│   │       │ │  │   - LSP integration     │  │   ├───────┤   │
+│   ├───────┤ │  │   - Go to definition    │  │   │Symbols│   │
+│   │Symbols│ │  └─────────────────────────┘  │   ├───────┤   │
+│   ├───────┤ ├───────────────────────────────┤   │ JIRA  │   │
+│   │ JIRA  │ │       Panel Area              │   ├───────┤   │
+│   ├───────┤ │  ┌─────────────────────────┐  │   │AI Chat│   │
+│   │ Timer │ │  │   TerminalWidget        │  │   ├───────┤   │
+│   ├───────┤ │  │   (or custom widgets)   │  │   │ Timer │   │
+│   │AI Chat│ │  └─────────────────────────┘  │   └───────┘   │
+│   └───────┘ │                               │               │
 └─────────────┴───────────────────────────────┴───────────────┘
                               │
                               ▼
@@ -57,7 +70,7 @@ Both systems use a registry pattern with singleton access, making it easy to reg
                     │ (Ctrl+Shift+P)  │
                     │                 │
                     │ > File: Open    │
-                    │   Edit: Find    │
+                    │   AI: Chat      │
                     │   View: Zoom In │
                     └─────────────────┘
 ```
@@ -421,6 +434,291 @@ struct ThemeUI {
     wxColour accent;
 };
 ```
+
+### Built-in Widgets
+
+ByteMuseHQ includes several built-in widgets:
+
+| Widget | ID | Location | Description |
+|--------|-----|----------|-------------|
+| **File Tree** | `core.fileTree` | Sidebar | File browser with tree navigation |
+| **Code Editor** | `core.editor` | Editor | Main code editing with syntax highlighting |
+| **Terminal** | `core.terminal` | Panel | Integrated shell terminal |
+| **Code Index** | `core.symbols` | Sidebar | Workspace symbol index with search |
+| **AI Chat** | `core.geminiChat` | Sidebar | Google Gemini chat with MCP tools |
+| **JIRA Issues** | `core.jira` | Sidebar | JIRA issue tracker integration |
+| **Focus Timer** | `core.timer` | Sidebar | Pomodoro-style productivity timer |
+
+All built-in widgets are registered in `builtin_widgets.h`:
+
+```cpp
+#include "ui/builtin_widgets.h"
+
+// Register all core widgets
+BuiltinWidgets::RegisterAll();
+```
+
+---
+
+## MCP (Model Context Protocol)
+
+The Model Context Protocol (MCP) provides a standardized way for AI assistants to interact with the editor and workspace. ByteMuseHQ implements several MCP providers that expose tools to the AI.
+
+### MCP Providers
+
+MCP providers are registered with the Gemini client and make tools available during AI conversations:
+
+```cpp
+#include "mcp/mcp.h"
+#include "mcp/mcp_filesystem.h"
+#include "mcp/mcp_terminal.h"
+#include "mcp/mcp_code_index.h"
+
+// Create providers
+auto fsProvider = std::make_shared<MCP::FilesystemProvider>("/path/to/workspace");
+auto termProvider = std::make_shared<MCP::TerminalProvider>("/path/to/workspace");
+auto codeProvider = std::make_shared<MCP::CodeIndexProvider>();
+
+// Register with AI client
+geminiClient.RegisterMCPProvider(fsProvider);
+geminiClient.RegisterMCPProvider(termProvider);
+geminiClient.RegisterMCPProvider(codeProvider);
+```
+
+### Available Tools
+
+#### Filesystem Provider (`mcp.filesystem`)
+
+Provides read-only access to workspace files:
+
+| Tool | Description |
+|------|-------------|
+| `fs_list_directory` | List files and directories |
+| `fs_read_file` | Read file contents |
+| `fs_read_file_lines` | Read specific line range |
+| `fs_get_file_info` | Get file metadata (size, modified) |
+| `fs_search_files` | Search files by name pattern |
+
+#### Terminal Provider (`mcp.terminal`)
+
+Provides shell command execution:
+
+| Tool | Description |
+|------|-------------|
+| `terminal_execute` | Execute a command and return output |
+| `terminal_get_shell_info` | Get available shell information |
+| `terminal_get_env` | Get environment variable value |
+| `terminal_which` | Find executable path |
+
+#### Code Index Provider (`mcp.codeindex`)
+
+Provides access to workspace symbols:
+
+| Tool | Description |
+|------|-------------|
+| `code_search_symbols` | Search symbols by name |
+| `code_list_file_symbols` | List all symbols in a file |
+| `code_list_functions` | List all functions in workspace |
+| `code_list_classes` | List all classes/structs |
+| `code_get_index_status` | Get indexing progress |
+
+### Creating Custom Providers
+
+Extend `MCP::Provider` to create custom tools:
+
+```cpp
+#include "mcp/mcp.h"
+
+class MyProvider : public MCP::Provider {
+public:
+    std::string getId() const override {
+        return "mcp.mytools";
+    }
+    
+    std::string getName() const override {
+        return "My Tools";
+    }
+    
+    std::string getDescription() const override {
+        return "Custom tools for my extension";
+    }
+    
+    std::vector<MCP::ToolDefinition> getTools() const override {
+        return {
+            {
+                "my_tool",
+                "Do something useful",
+                {
+                    {"param1", "string", "Description of param1", true},
+                    {"param2", "number", "Optional param", false}
+                }
+            }
+        };
+    }
+    
+    MCP::ToolResult executeTool(const std::string& name, 
+                                 const MCP::Value& args) const override {
+        if (name == "my_tool") {
+            auto param1 = args["param1"].asString();
+            // Do something...
+            return MCP::ToolResult::success("Result text");
+        }
+        return MCP::ToolResult::error("Unknown tool");
+    }
+};
+```
+
+---
+
+## AI Integration
+
+### Gemini Client
+
+ByteMuseHQ includes a full-featured Google Gemini API client:
+
+```cpp
+#include "ai/gemini_client.h"
+
+// Configure the client
+AI::GeminiConfig config;
+config.apiKey = "your-api-key";
+config.model = "gemini-1.5-flash";
+config.temperature = 0.7f;
+config.maxOutputTokens = 2048;
+config.enableMCP = true;  // Enable tool calling
+
+auto& client = AI::GeminiClient::Instance();
+client.Configure(config);
+
+// Simple generation
+auto response = client.Generate("Explain this code...");
+if (response.isOk()) {
+    wxLogMessage("Response: %s", response.text);
+}
+
+// Multi-turn chat
+std::vector<AI::ChatMessage> history;
+history.push_back({AI::MessageRole::User, "Hello!"});
+
+auto chatResponse = client.Chat(history, "How do I create a widget?");
+```
+
+### Function Calling
+
+The Gemini client supports automatic function calling via MCP:
+
+```cpp
+// The client automatically handles function calls when MCP is enabled
+auto response = client.Generate("List all functions in main.cpp");
+
+// Check if a function call is needed
+if (response.needsFunctionCall()) {
+    // Function name and arguments are available
+    wxLogMessage("Calling: %s", response.functionName);
+    wxLogMessage("Args: %s", response.functionArgs);
+    
+    // Execute the tool and continue the conversation
+    auto toolResult = executeMCPTool(response.functionName, response.functionArgs);
+    auto finalResponse = client.ContinueWithToolResult(toolResult);
+}
+```
+
+The AI Chat widget handles this automatically in a loop, allowing the AI to call multiple tools to answer complex questions.
+
+---
+
+## LSP Integration
+
+ByteMuseHQ includes an LSP (Language Server Protocol) client for code intelligence:
+
+```cpp
+#include "lsp/lsp_client.h"
+
+// Create and start the LSP client (e.g., clangd)
+LspClient lsp;
+lsp.Start("/usr/bin/clangd", {"--background-index"});
+
+// Wait for initialization
+lsp.WaitForInitialized();
+
+// Open a document
+lsp.DidOpen("/path/to/file.cpp", "cpp", fileContents);
+
+// Get document symbols
+lsp.RequestDocumentSymbols("/path/to/file.cpp", 
+    [](const std::vector<LspDocumentSymbol>& symbols) {
+        for (const auto& sym : symbols) {
+            wxLogMessage("Symbol: %s (%d)", sym.name, (int)sym.kind);
+        }
+    });
+
+// Go to definition
+lsp.RequestDefinition("/path/to/file.cpp", line, character,
+    [](const std::vector<LspLocation>& locations) {
+        if (!locations.empty()) {
+            // Navigate to locations[0]
+        }
+    });
+
+// Find references
+lsp.RequestReferences("/path/to/file.cpp", line, character,
+    [](const std::vector<LspLocation>& refs) {
+        wxLogMessage("Found %zu references", refs.size());
+    });
+```
+
+**Supported LSP Features:**
+
+- Document symbols (outline)
+- Go to definition
+- Find references
+- Diagnostics (errors/warnings)
+- Completion suggestions
+- Hover information
+
+---
+
+## HTTP Client
+
+ByteMuseHQ provides a cross-platform HTTP client for API integrations:
+
+```cpp
+#include "http/http_client.h"
+
+// Get the platform-appropriate client
+auto client = Http::CreateClient();  // Returns CURL or WinHTTP impl
+
+// Simple GET request
+auto response = client->get("https://api.example.com/data");
+if (response.isOk()) {
+    wxLogMessage("Body: %s", response.body);
+}
+
+// POST with JSON
+auto postResponse = client->post(
+    "https://api.example.com/items",
+    R"({"name": "test"})",
+    {{"Content-Type", "application/json"}}
+);
+
+// Full request configuration
+Http::HttpRequest request;
+request.url = "https://api.example.com/upload";
+request.method = "PUT";
+request.body = fileContents;
+request.headers = {
+    {"Authorization", "Bearer token123"},
+    {"Content-Type", "application/octet-stream"}
+};
+request.timeoutSeconds = 60;
+request.verifySsl = true;
+
+auto uploadResponse = client->perform(request);
+```
+
+The HTTP client is used internally by:
+- **Gemini Client** — For AI API calls
+- **JIRA Widget** — For issue fetching
 
 ---
 

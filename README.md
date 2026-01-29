@@ -14,6 +14,12 @@ A lightweight, cross-platform code editor built with wxWidgets and C++17. ByteMu
 - **Integrated Terminal** — Built-in shell access (`Ctrl+\``)
 - **Theming** — Dark and light themes with full customization
 - **Extensible Architecture** — Plugin system for commands and widgets
+- **AI Chat** — Google Gemini integration with MCP tool support for code assistance
+- **LSP Support** — Language Server Protocol client for code intelligence (clangd)
+- **Code Index** — Workspace symbol indexing with searchable symbol database
+- **JIRA Integration** — View and manage JIRA issues directly in the editor
+- **Focus Timer** — Pomodoro-style timer widget for productivity
+- **MCP Tools** — Model Context Protocol providers for filesystem, terminal, and code index access
 
 ## Building
 
@@ -97,7 +103,13 @@ Press `Ctrl+Shift+P` to open the command palette. Start typing to filter command
 
 - **File: New File** — Create a new empty file
 - **File: Open File** — Open an existing file
+- **File: Open Folder** — Open a folder in the workspace
 - **Edit: Find** — Search in the current file
+- **AI: Toggle Chat** — Show/hide the AI chat panel
+- **AI: Clear History** — Clear the AI conversation
+- **JIRA: Refresh Issues** — Fetch latest JIRA issues
+- **Timer: Start/Pause** — Control the focus timer
+- **Symbols: Refresh Index** — Re-index workspace symbols
 - **View: Toggle Word Wrap** — Enable/disable word wrapping
 - **Terminal: Toggle Terminal** — Show/hide the integrated terminal
 - **Preferences: Select Color Theme** — Switch between themes
@@ -118,7 +130,24 @@ bytemusehq/
 │   │   ├── editor.h/cpp      # Code editor component
 │   │   ├── terminal.h/cpp    # Terminal component
 │   │   ├── widget.h          # Widget plugin base class
-│   │   └── builtin_widgets.h # Built-in widget implementations
+│   │   ├── builtin_widgets.h # Built-in widget implementations
+│   │   ├── gemini_chat_widget.h  # AI chat widget
+│   │   ├── jira_widget.h     # JIRA integration widget
+│   │   ├── timer_widget.h    # Focus timer widget
+│   │   └── symbols_widget.h  # Code index widget
+│   ├── ai/
+│   │   └── gemini_client.h   # Google Gemini API client
+│   ├── lsp/
+│   │   └── lsp_client.h      # Language Server Protocol client
+│   ├── mcp/
+│   │   ├── mcp.h             # MCP value types and provider base
+│   │   ├── mcp_filesystem.h  # Filesystem tools for AI
+│   │   ├── mcp_terminal.h    # Terminal execution tools for AI
+│   │   └── mcp_code_index.h  # Code symbol tools for AI
+│   ├── http/
+│   │   ├── http_client.h     # Cross-platform HTTP client interface
+│   │   ├── http_client_curl.h    # CURL implementation (Linux/macOS)
+│   │   └── http_client_winhttp.h # WinHTTP implementation (Windows)
 │   ├── config/
 │   │   └── config.h/cpp      # Configuration management
 │   └── theme/
@@ -192,6 +221,22 @@ Configuration is stored in `~/.config/bytemusehq/config.json` (Linux/macOS) or `
     },
     "terminal": {
         "shell": "/bin/zsh"
+    },
+    "ai": {
+        "geminiApiKey": "your-api-key",
+        "model": "gemini-1.5-flash",
+        "temperature": 0.7,
+        "enableMCP": true
+    },
+    "jira": {
+        "baseUrl": "https://your-domain.atlassian.net",
+        "email": "your-email@example.com",
+        "apiToken": "your-api-token",
+        "project": "PROJ"
+    },
+    "timer": {
+        "workMinutes": 25,
+        "breakMinutes": 5
     }
 }
 ```
