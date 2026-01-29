@@ -93,7 +93,8 @@ struct GeminiConfig {
     
     // Safety settings - block thresholds (Gemini only)
     // Options: BLOCK_NONE, BLOCK_ONLY_HIGH, BLOCK_MEDIUM_AND_ABOVE, BLOCK_LOW_AND_ABOVE
-    std::string safetyThreshold = "BLOCK_MEDIUM_AND_ABOVE";
+    // Default to BLOCK_ONLY_HIGH for dev tools that need to run system commands
+    std::string safetyThreshold = "BLOCK_ONLY_HIGH";
     
     // Get the effective base URL for the current provider
     std::string getEffectiveBaseUrl() const {
@@ -317,6 +318,10 @@ public:
         m_config.temperature = static_cast<float>(cfg.GetDouble("ai.temperature", 0.7));
         m_config.maxOutputTokens = cfg.GetInt("ai.maxOutputTokens", 2048);
         m_config.systemInstruction = cfg.GetString("ai.systemInstruction", "").ToStdString();
+        
+        // Safety settings - for dev tools, default to less restrictive
+        // Options: BLOCK_NONE, BLOCK_ONLY_HIGH, BLOCK_MEDIUM_AND_ABOVE, BLOCK_LOW_AND_ABOVE
+        m_config.safetyThreshold = cfg.GetString("ai.safetyThreshold", "BLOCK_ONLY_HIGH").ToStdString();
     }
     
     /**
@@ -964,10 +969,24 @@ private:
         // Find the text content in candidates[0].content.parts[0].text
         size_t textStart = responseBody.find("\"text\"");
         if (textStart == std::string::npos) {
-            // Check for blocked content
-            if (responseBody.find("BLOCKED") != std::string::npos ||
+            // Check for blocked content - various indicators
+            if (responseBody.find("\"finishReason\":\"SAFETY\"") != std::string::npos ||
+                responseBody.find("\"finishReason\": \"SAFETY\"") != std::string::npos ||
+                responseBody.find("BLOCKED") != std::string::npos ||
                 responseBody.find("blockReason") != std::string::npos) {
-                result.error = "Response was blocked by safety filters";
+                // Try to identify which category triggered
+                std::string category = "unknown";
+                if (responseBody.find("HARM_CATEGORY_DANGEROUS_CONTENT") != std::string::npos &&
+                    (responseBody.find("\"MEDIUM\"") != std::string::npos || 
+                     responseBody.find("\"HIGH\"") != std::string::npos)) {
+                    category = "DANGEROUS_CONTENT";
+                } else if (responseBody.find("HARM_CATEGORY_HARASSMENT") != std::string::npos) {
+                    category = "HARASSMENT";
+                } else if (responseBody.find("HARM_CATEGORY_HATE_SPEECH") != std::string::npos) {
+                    category = "HATE_SPEECH";
+                }
+                result.error = "Response blocked by safety filter (" + category + "). "
+                              "Try setting ai.safetyThreshold to BLOCK_ONLY_HIGH or BLOCK_NONE in config.";
             } else {
                 result.error = "No text found in response";
             }
