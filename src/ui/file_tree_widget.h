@@ -33,6 +33,7 @@ public:
         info.name = "File Explorer";
         info.description = "Browse and open files in the workspace";
         info.location = WidgetLocation::Sidebar;
+        info.category = WidgetCategories::Explorer();
         info.priority = 100;
         info.showByDefault = true;
         return info;

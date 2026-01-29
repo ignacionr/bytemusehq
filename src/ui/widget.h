@@ -59,6 +59,7 @@ struct WidgetCategory {
  */
 namespace WidgetCategories {
     // Core categories
+    inline WidgetCategory Explorer() { return WidgetCategory("explorer", "Explorer", "📁", 5); }
     inline WidgetCategory Productivity() { return WidgetCategory("productivity", "Productivity", "⏱", 10); }
     inline WidgetCategory AI() { return WidgetCategory("ai", "AI Assistant", "🤖", 20); }
     inline WidgetCategory Integrations() { return WidgetCategory("integrations", "Integrations", "🔗", 30); }

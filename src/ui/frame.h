@@ -66,6 +66,7 @@ private:
     wxPanel* m_leftContentPanel;       // Tree control area
     WidgetActivityBar* m_activityBar;  // Activity bar with category buttons
     WidgetBar* m_widgetBar;            // Widget bar for sidebar widgets
+    wxString m_currentCategory;        // Currently selected category ID
     int m_themeListenerId;
     WidgetContext m_widgetContext;
     

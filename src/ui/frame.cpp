@@ -371,6 +371,9 @@ void MainFrame::SetupSidebarWidgets()
 
 void MainFrame::SetupActivityBar()
 {
+    // Add Explorer category for the file tree (always first)
+    m_activityBar->AddCategory(WidgetCategories::Explorer());
+    
     // Get categories from the widget bar
     auto categories = m_widgetBar->GetCategories();
     
@@ -379,16 +382,29 @@ void MainFrame::SetupActivityBar()
         m_activityBar->AddCategory(category);
     }
     
-    // Select the first category by default
-    if (!categories.empty()) {
-        m_activityBar->SelectCategory(categories[0].id);
-        m_widgetBar->SetActiveCategory(categories[0].id);
-    }
+    // Select Explorer category by default
+    m_activityBar->SelectCategory("explorer");
+    OnCategorySelected("explorer");
 }
 
 void MainFrame::OnCategorySelected(const wxString& categoryId)
 {
-    // Update the widget bar to show widgets from the selected category
+    m_currentCategory = categoryId;
+    
+    // Handle Explorer category specially - show file tree only
+    if (categoryId == "explorer") {
+        // Hide widget bar, show only file tree
+        if (m_leftSplitter->IsSplit()) {
+            m_leftSplitter->Unsplit(m_widgetBar);
+        }
+        m_widgetBar->Hide();
+        m_leftContentPanel->Show();
+        m_leftSplitter->Initialize(m_leftContentPanel);
+        return;
+    }
+    
+    // For other categories: hide file tree, show widget bar
+    m_leftContentPanel->Hide();
     m_widgetBar->SetActiveCategory(categoryId);
     UpdateWidgetBarVisibility();
 }
@@ -398,16 +414,27 @@ void MainFrame::UpdateWidgetBarVisibility()
     bool hasVisibleWidgets = m_widgetBar->HasVisibleWidgets();
     
     if (hasVisibleWidgets) {
-        // Show widget bar and split if needed
+        // Show widget bar only (file tree is hidden for non-Explorer categories)
         m_widgetBar->Show();
-        if (!m_leftSplitter->IsSplit()) {
-            m_leftSplitter->SplitHorizontally(m_leftContentPanel, m_widgetBar);
-            m_leftSplitter->SetSashGravity(0.5);
-            int height = m_leftSplitter->GetSize().GetHeight();
-            m_leftSplitter->SetSashPosition(height / 2);
+        if (m_leftSplitter->IsSplit()) {
+            m_leftSplitter->Unsplit();
         }
+        m_leftSplitter->Initialize(m_widgetBar);
+        
+        // Force layout update to ensure widgets are properly sized
+        m_widgetBar->Layout();
+        m_leftSplitter->Layout();
+        m_leftPanel->Layout();
+        
+        // Queue another layout after the window is shown
+        CallAfter([this]() {
+            if (m_widgetBar) {
+                m_widgetBar->Layout();
+                m_widgetBar->Refresh();
+            }
+        });
     } else {
-        // No visible widgets - hide the widget bar
+        // No visible widgets - show empty state or file tree
         if (m_leftSplitter->IsSplit()) {
             m_leftSplitter->Unsplit(m_widgetBar);
         }
