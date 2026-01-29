@@ -352,12 +352,12 @@ public:
         mainSizer->Add(m_book, 1, wxEXPAND | wxALL, 5);
         
         // Legend footer
-        wxStaticText* legendLabel = new wxStaticText(m_panel, wxID_ANY, 
+        m_legendLabel = new wxStaticText(m_panel, wxID_ANY, 
             wxT("\U0001F7E2 Done  \U0001F535 In Progress  \u26AA To Do  \U0001F534 Blocked"));
-        wxFont legendFont = legendLabel->GetFont();
+        wxFont legendFont = m_legendLabel->GetFont();
         legendFont.SetPointSize(7);
-        legendLabel->SetFont(legendFont);
-        mainSizer->Add(legendLabel, 0, wxALL | wxALIGN_CENTER, 5);
+        m_legendLabel->SetFont(legendFont);
+        mainSizer->Add(m_legendLabel, 0, wxALL | wxALIGN_CENTER, 5);
         
         m_panel->SetSizer(mainSizer);
         
@@ -385,6 +385,9 @@ public:
         m_headerLabel->SetForegroundColour(m_fgColor);
         m_statusLabel->SetForegroundColour(wxColour(120, 120, 120));
         m_issuesPanel->SetBackgroundColour(m_bgColor);
+        if (m_legendLabel) {
+            m_legendLabel->SetForegroundColour(wxColour(150, 150, 150));
+        }
         
         // Update all issue cards
         for (wxWindow* child : m_issuesPanel->GetChildren()) {
@@ -517,6 +520,7 @@ private:
     wxPanel* m_panel = nullptr;
     wxStaticText* m_headerLabel = nullptr;
     wxStaticText* m_statusLabel = nullptr;
+    wxStaticText* m_legendLabel = nullptr;
     wxButton* m_refreshBtn = nullptr;
     wxButton* m_myIssuesBtn = nullptr;
     wxButton* m_createBtn = nullptr;
