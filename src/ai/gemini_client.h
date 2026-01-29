@@ -423,10 +423,20 @@ public:
         GeminiResponse response = GenerateFromMessages(messages);
         
         // Add model response to history if successful
-        if (response.isOk() && !response.hasFunctionCall) {
+        if (response.isOk()) {
             std::lock_guard<std::mutex> lock(m_mutex);
-            m_conversationHistory.emplace_back(MessageRole::Model, response.text);
-        } else if (!response.isOk()) {
+            if (response.hasFunctionCall) {
+                // For function calls, add a message indicating the model requested a tool
+                // This is important for conversation continuity when ContinueWithToolResult is called
+                std::string funcCallMsg = "[Calling tool: " + response.functionName + "]";
+                if (!response.functionArgs.empty()) {
+                    funcCallMsg += "\nArguments: " + response.functionArgs;
+                }
+                m_conversationHistory.emplace_back(MessageRole::Model, funcCallMsg);
+            } else {
+                m_conversationHistory.emplace_back(MessageRole::Model, response.text);
+            }
+        } else {
             // Remove the failed user message
             std::lock_guard<std::mutex> lock(m_mutex);
             if (!m_conversationHistory.empty()) {
@@ -434,7 +444,7 @@ public:
             }
         }
         // Note: For function calls, the caller is responsible for handling the tool
-        // response and continuing the conversation
+        // response and continuing the conversation via ContinueWithToolResult
         
         return response;
     }
