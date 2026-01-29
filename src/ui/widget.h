@@ -32,6 +32,41 @@ enum class WidgetLocation {
 };
 
 /**
+ * Widget category for grouping related widgets in the activity bar.
+ * Each category gets its own button in the activity bar.
+ */
+struct WidgetCategory {
+    wxString id;            // Unique identifier (e.g., "productivity")
+    wxString name;          // Display name
+    wxString icon;          // Icon character (emoji or symbol)
+    int order;              // Display order in activity bar (lower = higher)
+    
+    WidgetCategory() : order(100) {}
+    WidgetCategory(const wxString& id_, const wxString& name_, const wxString& icon_, int order_ = 100)
+        : id(id_), name(name_), icon(icon_), order(order_) {}
+    
+    bool operator<(const WidgetCategory& other) const {
+        return order < other.order;
+    }
+    
+    bool operator==(const WidgetCategory& other) const {
+        return id == other.id;
+    }
+};
+
+/**
+ * Predefined widget categories.
+ */
+namespace WidgetCategories {
+    // Core categories
+    inline WidgetCategory Productivity() { return WidgetCategory("productivity", "Productivity", "⏱", 10); }
+    inline WidgetCategory AI() { return WidgetCategory("ai", "AI Assistant", "🤖", 20); }
+    inline WidgetCategory Integrations() { return WidgetCategory("integrations", "Integrations", "🔗", 30); }
+    inline WidgetCategory Tools() { return WidgetCategory("tools", "Tools", "🛠", 40); }
+    inline WidgetCategory Settings() { return WidgetCategory("settings", "Settings", "⚙", 90); }
+}
+
+/**
  * Widget metadata describing the widget's properties and behavior.
  */
 struct WidgetInfo {
@@ -39,7 +74,8 @@ struct WidgetInfo {
     wxString name;                  // Display name
     wxString description;           // Brief description
     WidgetLocation location;        // Where the widget should be placed
-    int priority;                   // Display order (higher = shown first)
+    WidgetCategory category;        // Category for grouping in activity bar
+    int priority;                   // Display order within category (higher = shown first)
     bool showByDefault;             // Whether to show on startup
     
     WidgetInfo() : location(WidgetLocation::Panel), priority(0), showByDefault(true) {}

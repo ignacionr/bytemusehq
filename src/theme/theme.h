@@ -60,6 +60,10 @@ public:
         wxColour sidebarBackground;
         wxColour sidebarForeground;
         wxColour sidebarSelection;
+        wxColour activityBarBackground;
+        wxColour activityBarForeground;
+        wxColour accent;
+        wxColour foreground;
         wxColour statusBarBackground;
         wxColour statusBarForeground;
         wxColour titleBarBackground;

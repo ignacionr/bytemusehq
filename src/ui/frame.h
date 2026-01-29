@@ -8,8 +8,12 @@
 #include "terminal.h"
 #include "widget.h"
 #include "widget_bar.h"
+#include "widget_activity_bar.h"
 #include "../commands/command.h"
 #include "../theme/theme.h"
+
+// Forward declaration
+class WidgetActivityBar;
 
 // Custom tree item data to store file paths
 class PathData : public wxTreeItemData {
@@ -55,17 +59,21 @@ private:
     Editor* m_editor;
     Terminal* m_terminal;
     wxSplitterWindow* m_rightSplitter; // Vertical splitter for editor/terminal
-    wxSplitterWindow* m_hSplitter;     // Horizontal splitter (tree | right)
+    wxSplitterWindow* m_hSplitter;     // Horizontal splitter (left area | right)
     wxSplitterWindow* m_leftSplitter;  // Vertical splitter for tree/widget bar
     wxPanel* m_mainPanel;
-    wxPanel* m_leftPanel;
-    WidgetBar* m_widgetBar;  // Widget bar for sidebar widgets
+    wxPanel* m_leftPanel;              // Contains activity bar + tree
+    wxPanel* m_leftContentPanel;       // Tree control area
+    WidgetActivityBar* m_activityBar;  // Activity bar with category buttons
+    WidgetBar* m_widgetBar;            // Widget bar for sidebar widgets
     int m_themeListenerId;
     WidgetContext m_widgetContext;
     
     void SetupUI();
+    void SetupActivityBar();           // Initialize the activity bar with categories
     void SetupSidebarWidgets();
     void UpdateWidgetBarVisibility();  // Show/hide widget bar based on visible widgets
+    void OnCategorySelected(const wxString& categoryId);  // Handle category selection
     void SetupMenuBar();
     void SetupAccelerators();
     void RegisterCommands();

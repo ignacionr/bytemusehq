@@ -209,6 +209,7 @@ public:
         info.name = "AI Chat";
         info.description = "Chat with Google Gemini AI";
         info.location = WidgetLocation::Sidebar;
+        info.category = WidgetCategories::AI();
         info.priority = 55;
         info.showByDefault = true;
         return info;

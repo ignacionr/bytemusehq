@@ -257,6 +257,7 @@ public:
         info.name = "Focus Timer";
         info.description = "Pomodoro-style focus timer with visual progress";
         info.location = WidgetLocation::Sidebar;
+        info.category = WidgetCategories::Productivity();
         info.priority = 50;
         info.showByDefault = true;
         return info;

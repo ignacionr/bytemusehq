@@ -234,6 +234,7 @@ public:
         info.name = "JIRA Issues";
         info.description = "View and manage your JIRA issues";
         info.location = WidgetLocation::Sidebar;
+        info.category = WidgetCategories::Productivity();
         info.priority = 60;
         info.showByDefault = true;
         return info;

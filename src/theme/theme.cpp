@@ -73,6 +73,10 @@ ThemePtr ThemeManager::CreateDarkTheme() {
     theme->ui.sidebarBackground = wxColour(37, 37, 38);
     theme->ui.sidebarForeground = wxColour(204, 204, 204);
     theme->ui.sidebarSelection = wxColour(55, 55, 55);
+    theme->ui.activityBarBackground = wxColour(51, 51, 51);    // #333333 - Slightly different
+    theme->ui.activityBarForeground = wxColour(150, 150, 150);
+    theme->ui.accent = wxColour(0, 122, 204);                   // #007acc - VSCode blue
+    theme->ui.foreground = wxColour(255, 255, 255);
     theme->ui.statusBarBackground = wxColour(0, 122, 204);     // Blue status bar
     theme->ui.statusBarForeground = wxColour(255, 255, 255);
     theme->ui.titleBarBackground = wxColour(60, 60, 60);
@@ -142,6 +146,10 @@ ThemePtr ThemeManager::CreateLightTheme() {
     theme->ui.sidebarBackground = wxColour(243, 243, 243);
     theme->ui.sidebarForeground = wxColour(51, 51, 51);
     theme->ui.sidebarSelection = wxColour(200, 200, 200);
+    theme->ui.activityBarBackground = wxColour(232, 232, 232);
+    theme->ui.activityBarForeground = wxColour(100, 100, 100);
+    theme->ui.accent = wxColour(0, 122, 204);
+    theme->ui.foreground = wxColour(51, 51, 51);
     theme->ui.statusBarBackground = wxColour(0, 122, 204);
     theme->ui.statusBarForeground = wxColour(255, 255, 255);
     theme->ui.titleBarBackground = wxColour(221, 221, 221);

@@ -95,6 +95,7 @@ private:
  * - Widgets can be shown/hidden dynamically
  * - Widgets can be collapsed to show only their header
  * - Resizable sashes between widgets for manual height adjustment
+ * - Category filtering to show only widgets from selected category
  * - Proper cleanup when hiding widgets (no reparenting issues)
  * - Theme support
  */
@@ -106,7 +107,17 @@ public:
     // Add a widget to the bar (creates container but doesn't show yet)
     void AddWidget(WidgetPtr widget);
     
-    // Show/hide a specific widget
+    // Category filtering
+    void SetActiveCategory(const wxString& categoryId);
+    wxString GetActiveCategory() const { return m_activeCategoryId; }
+    
+    // Get all unique categories from registered widgets
+    std::vector<WidgetCategory> GetCategories() const;
+    
+    // Get widgets in a specific category
+    std::vector<wxString> GetWidgetsInCategory(const wxString& categoryId) const;
+    
+    // Show/hide a specific widget (within its category)
     void ShowWidget(const wxString& widgetId, bool show = true);
     void HideWidget(const wxString& widgetId) { ShowWidget(widgetId, false); }
     void ToggleWidget(const wxString& widgetId);
@@ -114,10 +125,10 @@ public:
     // Check if a widget is currently visible
     bool IsWidgetVisible(const wxString& widgetId) const;
     
-    // Check if any widgets are visible
+    // Check if any widgets are visible in the active category
     bool HasVisibleWidgets() const;
     
-    // Get the list of visible widget IDs
+    // Get the list of visible widget IDs in active category
     std::vector<wxString> GetVisibleWidgetIds() const;
     
     // Apply theme to all widgets and containers
@@ -138,11 +149,14 @@ private:
     // Containers for each widget (created on first show)
     std::map<wxString, WidgetContainer*> m_containers;
     
-    // Set of currently visible widget IDs
-    std::set<wxString> m_visibleWidgets;
+    // Set of visible widget IDs per category
+    std::map<wxString, std::set<wxString>> m_visibleWidgetsByCategory;
     
-    // Order of widgets (by priority from WidgetInfo)
-    std::vector<wxString> m_widgetOrder;
+    // Order of widgets within each category (by priority from WidgetInfo)
+    std::map<wxString, std::vector<wxString>> m_widgetOrderByCategory;
+    
+    // Currently active category
+    wxString m_activeCategoryId;
     
     // Sashes between visible containers
     std::vector<WidgetSash*> m_sashes;

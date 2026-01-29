@@ -310,10 +310,18 @@ void WidgetBar::AddWidget(WidgetPtr widget)
     if (!widget) return;
     
     auto info = widget->GetInfo();
+    wxString categoryId = info.category.id;
+    if (categoryId.empty()) {
+        categoryId = "tools"; // Default category
+    }
+    
     m_widgets[info.id] = widget;
     
+    // Get or create the widget order list for this category
+    auto& widgetOrder = m_widgetOrderByCategory[categoryId];
+    
     // Insert in order by priority (higher priority first)
-    auto it = std::find_if(m_widgetOrder.begin(), m_widgetOrder.end(),
+    auto it = std::find_if(widgetOrder.begin(), widgetOrder.end(),
         [this, &info](const wxString& id) {
             auto wit = m_widgets.find(id);
             if (wit != m_widgets.end()) {
@@ -321,12 +329,73 @@ void WidgetBar::AddWidget(WidgetPtr widget)
             }
             return false;
         });
-    m_widgetOrder.insert(it, info.id);
+    widgetOrder.insert(it, info.id);
     
-    // If widget should show by default, mark it visible
+    // If widget should show by default, mark it visible in its category
     if (info.showByDefault) {
-        m_visibleWidgets.insert(info.id);
+        m_visibleWidgetsByCategory[categoryId].insert(info.id);
     }
+    
+    // If no active category set, use the first one we add
+    if (m_activeCategoryId.empty()) {
+        m_activeCategoryId = categoryId;
+    }
+}
+
+void WidgetBar::SetActiveCategory(const wxString& categoryId)
+{
+    if (m_activeCategoryId == categoryId) return;
+    
+    m_activeCategoryId = categoryId;
+    RebuildLayout();
+}
+
+std::vector<WidgetCategory> WidgetBar::GetCategories() const
+{
+    std::set<wxString> seenCategories;
+    std::vector<WidgetCategory> categories;
+    
+    for (const auto& [id, widget] : m_widgets) {
+        auto info = widget->GetInfo();
+        wxString categoryId = info.category.id;
+        if (categoryId.empty()) {
+            categoryId = "tools";
+        }
+        
+        if (seenCategories.find(categoryId) == seenCategories.end()) {
+            seenCategories.insert(categoryId);
+            if (info.category.id.empty()) {
+                // Use default Tools category
+                categories.push_back(WidgetCategories::Tools());
+            } else {
+                categories.push_back(info.category);
+            }
+        }
+    }
+    
+    // Sort by order
+    std::sort(categories.begin(), categories.end());
+    
+    return categories;
+}
+
+std::vector<wxString> WidgetBar::GetWidgetsInCategory(const wxString& categoryId) const
+{
+    std::vector<wxString> result;
+    
+    for (const auto& [id, widget] : m_widgets) {
+        auto info = widget->GetInfo();
+        wxString widgetCategory = info.category.id;
+        if (widgetCategory.empty()) {
+            widgetCategory = "tools";
+        }
+        
+        if (widgetCategory == categoryId) {
+            result.push_back(id);
+        }
+    }
+    
+    return result;
 }
 
 WidgetContainer* WidgetBar::GetOrCreateContainer(const wxString& widgetId)
@@ -371,16 +440,26 @@ void WidgetBar::ShowWidget(const wxString& widgetId, bool show)
     auto wit = m_widgets.find(widgetId);
     if (wit == m_widgets.end()) return;
     
-    bool currentlyVisible = m_visibleWidgets.count(widgetId) > 0;
+    auto info = wit->second->GetInfo();
+    wxString categoryId = info.category.id;
+    if (categoryId.empty()) {
+        categoryId = "tools";
+    }
+    
+    auto& visibleSet = m_visibleWidgetsByCategory[categoryId];
+    bool currentlyVisible = visibleSet.count(widgetId) > 0;
     if (currentlyVisible == show) return;
     
     if (show) {
-        m_visibleWidgets.insert(widgetId);
+        visibleSet.insert(widgetId);
     } else {
-        m_visibleWidgets.erase(widgetId);
+        visibleSet.erase(widgetId);
     }
     
-    RebuildLayout();
+    // Only rebuild if this affects the active category
+    if (categoryId == m_activeCategoryId) {
+        RebuildLayout();
+    }
 }
 
 void WidgetBar::ToggleWidget(const wxString& widgetId)
@@ -390,22 +469,46 @@ void WidgetBar::ToggleWidget(const wxString& widgetId)
 
 bool WidgetBar::IsWidgetVisible(const wxString& widgetId) const
 {
-    return m_visibleWidgets.count(widgetId) > 0;
+    auto wit = m_widgets.find(widgetId);
+    if (wit == m_widgets.end()) return false;
+    
+    auto info = wit->second->GetInfo();
+    wxString categoryId = info.category.id;
+    if (categoryId.empty()) {
+        categoryId = "tools";
+    }
+    
+    auto it = m_visibleWidgetsByCategory.find(categoryId);
+    if (it == m_visibleWidgetsByCategory.end()) return false;
+    
+    return it->second.count(widgetId) > 0;
 }
 
 bool WidgetBar::HasVisibleWidgets() const
 {
-    return !m_visibleWidgets.empty();
+    auto it = m_visibleWidgetsByCategory.find(m_activeCategoryId);
+    if (it == m_visibleWidgetsByCategory.end()) return false;
+    return !it->second.empty();
 }
 
 std::vector<wxString> WidgetBar::GetVisibleWidgetIds() const
 {
     std::vector<wxString> result;
-    for (const auto& id : m_widgetOrder) {
-        if (m_visibleWidgets.count(id)) {
+    
+    auto orderIt = m_widgetOrderByCategory.find(m_activeCategoryId);
+    auto visibleIt = m_visibleWidgetsByCategory.find(m_activeCategoryId);
+    
+    if (orderIt == m_widgetOrderByCategory.end() || 
+        visibleIt == m_visibleWidgetsByCategory.end()) {
+        return result;
+    }
+    
+    for (const auto& id : orderIt->second) {
+        if (visibleIt->second.count(id)) {
             result.push_back(id);
         }
     }
+    
     return result;
 }
 
@@ -456,13 +559,20 @@ void WidgetBar::RebuildLayout()
     }
     m_sashes.clear();
     
-    // Get visible containers in order
+    // Get visible containers in order for the active category
     std::vector<WidgetContainer*> visibleContainers;
-    for (const auto& id : m_widgetOrder) {
-        if (m_visibleWidgets.count(id)) {
-            WidgetContainer* container = GetOrCreateContainer(id);
-            if (container) {
-                visibleContainers.push_back(container);
+    
+    auto orderIt = m_widgetOrderByCategory.find(m_activeCategoryId);
+    auto visibleIt = m_visibleWidgetsByCategory.find(m_activeCategoryId);
+    
+    if (orderIt != m_widgetOrderByCategory.end() && 
+        visibleIt != m_visibleWidgetsByCategory.end()) {
+        for (const auto& id : orderIt->second) {
+            if (visibleIt->second.count(id)) {
+                WidgetContainer* container = GetOrCreateContainer(id);
+                if (container) {
+                    visibleContainers.push_back(container);
+                }
             }
         }
     }

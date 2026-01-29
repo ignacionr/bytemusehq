@@ -10,6 +10,7 @@
 #include "../theme/theme.h"
 #include "builtin_widgets.h"
 #include "widget_bar.h"
+#include "widget_activity_bar.h"
 
 enum {
     ID_COMMAND_PALETTE = wxID_HIGHEST + 1,
@@ -41,6 +42,7 @@ MainFrame::MainFrame()
     RegisterWidgets();
     SetupUI();
     SetupSidebarWidgets();  // Initialize sidebar widgets after UI is set up
+    SetupActivityBar();     // Set up activity bar after widgets are registered
     SetupMenuBar();
     SetupAccelerators();
     ApplyCurrentTheme();
@@ -68,28 +70,43 @@ void MainFrame::SetupUI()
     m_mainPanel = new wxPanel(this);
     wxBoxSizer* mainSizer = new wxBoxSizer(wxHORIZONTAL);
     
-    // Create horizontal splitter window (left sidebar | right area)
+    // Horizontal splitter (left panel | right area) - create first as parent for children
     m_hSplitter = new wxSplitterWindow(m_mainPanel, wxID_ANY, 
         wxDefaultPosition, wxDefaultSize, wxSP_LIVE_UPDATE);
     
-    // Left area: Vertical splitter for tree/widget bar
-    m_leftSplitter = new wxSplitterWindow(m_hSplitter, wxID_ANY,
+    // Left panel contains: Activity Bar | Tree/WidgetBar area
+    // Parent must be m_hSplitter for SplitVertically to work
+    m_leftPanel = new wxPanel(m_hSplitter);
+    wxBoxSizer* leftPanelSizer = new wxBoxSizer(wxHORIZONTAL);
+    
+    // Activity bar (far left column with category buttons)
+    m_activityBar = new WidgetActivityBar(m_leftPanel);
+    m_activityBar->OnCategorySelected = [this](const wxString& categoryId) {
+        OnCategorySelected(categoryId);
+    };
+    leftPanelSizer->Add(m_activityBar, 0, wxEXPAND);
+    
+    // Left splitter for tree/widget bar
+    m_leftSplitter = new wxSplitterWindow(m_leftPanel, wxID_ANY,
         wxDefaultPosition, wxDefaultSize, wxSP_LIVE_UPDATE);
     
-    // Left panel: Tree control
-    m_leftPanel = new wxPanel(m_leftSplitter);
-    wxBoxSizer* leftSizer = new wxBoxSizer(wxVERTICAL);
+    // Left content panel: Tree control
+    m_leftContentPanel = new wxPanel(m_leftSplitter);
+    wxBoxSizer* leftContentSizer = new wxBoxSizer(wxVERTICAL);
     
-    m_treeCtrl = new wxTreeCtrl(m_leftPanel, wxID_ANY);
-    leftSizer->Add(m_treeCtrl, 1, wxEXPAND | wxALL, 0);
-    m_leftPanel->SetSizer(leftSizer);
+    m_treeCtrl = new wxTreeCtrl(m_leftContentPanel, wxID_ANY);
+    leftContentSizer->Add(m_treeCtrl, 1, wxEXPAND | wxALL, 0);
+    m_leftContentPanel->SetSizer(leftContentSizer);
     
     // Widget bar for sidebar widgets (Timer, Jira, etc.)
     m_widgetBar = new WidgetBar(m_leftSplitter, m_widgetContext);
     
     // Initially show only tree (widget bar added later if widgets are visible)
-    m_leftSplitter->Initialize(m_leftPanel);
+    m_leftSplitter->Initialize(m_leftContentPanel);
     m_leftSplitter->SetMinimumPaneSize(100);
+    
+    leftPanelSizer->Add(m_leftSplitter, 1, wxEXPAND);
+    m_leftPanel->SetSizer(leftPanelSizer);
     
     // Right area: Vertical splitter for editor/terminal
     m_rightSplitter = new wxSplitterWindow(m_hSplitter, wxID_ANY,
@@ -115,9 +132,9 @@ void MainFrame::SetupUI()
     m_rightSplitter->SetMinimumPaneSize(100);
     
     // Split horizontal (left | right)
-    m_hSplitter->SplitVertically(m_leftSplitter, m_rightSplitter);
-    m_hSplitter->SetSashPosition(250);
-    m_hSplitter->SetMinimumPaneSize(100);
+    m_hSplitter->SplitVertically(m_leftPanel, m_rightSplitter);
+    m_hSplitter->SetSashPosition(300);  // Slightly wider to accommodate activity bar
+    m_hSplitter->SetMinimumPaneSize(150);
     
     mainSizer->Add(m_hSplitter, 1, wxEXPAND);
     m_mainPanel->SetSizer(mainSizer);
@@ -151,9 +168,19 @@ void MainFrame::ApplyTheme(const ThemePtr& theme)
         m_mainPanel->SetBackgroundColour(ui.windowBackground);
     }
     
-    // Left panel (sidebar)
+    // Left panel (sidebar container)
     if (m_leftPanel) {
         m_leftPanel->SetBackgroundColour(ui.sidebarBackground);
+    }
+    
+    // Left content panel (tree area)
+    if (m_leftContentPanel) {
+        m_leftContentPanel->SetBackgroundColour(ui.sidebarBackground);
+    }
+    
+    // Activity bar
+    if (m_activityBar) {
+        m_activityBar->ApplyTheme(theme);
     }
     
     // Widget bar
@@ -342,6 +369,30 @@ void MainFrame::SetupSidebarWidgets()
     UpdateWidgetBarVisibility();
 }
 
+void MainFrame::SetupActivityBar()
+{
+    // Get categories from the widget bar
+    auto categories = m_widgetBar->GetCategories();
+    
+    // Add categories to the activity bar
+    for (const auto& category : categories) {
+        m_activityBar->AddCategory(category);
+    }
+    
+    // Select the first category by default
+    if (!categories.empty()) {
+        m_activityBar->SelectCategory(categories[0].id);
+        m_widgetBar->SetActiveCategory(categories[0].id);
+    }
+}
+
+void MainFrame::OnCategorySelected(const wxString& categoryId)
+{
+    // Update the widget bar to show widgets from the selected category
+    m_widgetBar->SetActiveCategory(categoryId);
+    UpdateWidgetBarVisibility();
+}
+
 void MainFrame::UpdateWidgetBarVisibility()
 {
     bool hasVisibleWidgets = m_widgetBar->HasVisibleWidgets();
@@ -350,7 +401,7 @@ void MainFrame::UpdateWidgetBarVisibility()
         // Show widget bar and split if needed
         m_widgetBar->Show();
         if (!m_leftSplitter->IsSplit()) {
-            m_leftSplitter->SplitHorizontally(m_leftPanel, m_widgetBar);
+            m_leftSplitter->SplitHorizontally(m_leftContentPanel, m_widgetBar);
             m_leftSplitter->SetSashGravity(0.5);
             int height = m_leftSplitter->GetSize().GetHeight();
             m_leftSplitter->SetSashPosition(height / 2);
