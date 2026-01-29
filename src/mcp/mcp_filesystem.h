@@ -1,0 +1,687 @@
+#ifndef MCP_FILESYSTEM_H
+#define MCP_FILESYSTEM_H
+
+#include "mcp.h"
+#include <wx/dir.h>
+#include <wx/filename.h>
+#include <wx/file.h>
+#include <wx/textfile.h>
+#include <wx/wfstream.h>
+#include <fstream>
+#include <sstream>
+
+namespace MCP {
+
+/**
+ * Filesystem MCP Provider.
+ * 
+ * Provides tools for the AI to interact with the filesystem within
+ * the currently open workspace/directory. This is designed to be
+ * an isolated component that can be integrated with the file explorer widget.
+ * 
+ * Security: All operations are sandboxed to the configured root directory.
+ * The AI cannot access files outside this directory.
+ * 
+ * Available tools:
+ * - fs_list_directory: List files and directories
+ * - fs_read_file: Read file contents
+ * - fs_get_file_info: Get file metadata
+ * - fs_search_files: Search for files by name pattern
+ * - fs_read_file_lines: Read specific lines from a file
+ */
+class FilesystemProvider : public Provider {
+public:
+    FilesystemProvider() {
+        // Default to current working directory
+        m_rootPath = wxGetCwd().ToStdString();
+    }
+    
+    explicit FilesystemProvider(const std::string& rootPath) 
+        : m_rootPath(rootPath) {}
+    
+    std::string getId() const override {
+        return "mcp.filesystem";
+    }
+    
+    std::string getName() const override {
+        return "Filesystem";
+    }
+    
+    std::string getDescription() const override {
+        return "Provides read-only access to files in the current workspace";
+    }
+    
+    /**
+     * Set the root path for filesystem operations.
+     * All paths will be relative to this directory.
+     */
+    void setRootPath(const std::string& path) {
+        m_rootPath = path;
+    }
+    
+    /**
+     * Get the current root path.
+     */
+    std::string getRootPath() const {
+        return m_rootPath;
+    }
+    
+    std::vector<ToolDefinition> getTools() const override {
+        std::vector<ToolDefinition> tools;
+        
+        // fs_list_directory
+        {
+            ToolDefinition tool;
+            tool.name = "fs_list_directory";
+            tool.description = "List files and directories in a given path within the workspace. "
+                             "Returns names, types (file/directory), and sizes.";
+            tool.parameters = {
+                {"path", "string", "Relative path to the directory to list. Use '.' for root.", true},
+                {"recursive", "boolean", "If true, list recursively (default: false)", false},
+                {"max_depth", "number", "Maximum recursion depth (default: 3)", false}
+            };
+            tools.push_back(tool);
+        }
+        
+        // fs_read_file
+        {
+            ToolDefinition tool;
+            tool.name = "fs_read_file";
+            tool.description = "Read the contents of a file. For large files, consider using "
+                             "fs_read_file_lines to read specific sections.";
+            tool.parameters = {
+                {"path", "string", "Relative path to the file to read", true},
+                {"max_size", "number", "Maximum bytes to read (default: 100000)", false}
+            };
+            tools.push_back(tool);
+        }
+        
+        // fs_read_file_lines
+        {
+            ToolDefinition tool;
+            tool.name = "fs_read_file_lines";
+            tool.description = "Read specific lines from a file. Useful for examining parts of large files.";
+            tool.parameters = {
+                {"path", "string", "Relative path to the file", true},
+                {"start_line", "number", "First line to read (1-indexed)", true},
+                {"end_line", "number", "Last line to read (inclusive)", true}
+            };
+            tools.push_back(tool);
+        }
+        
+        // fs_get_file_info
+        {
+            ToolDefinition tool;
+            tool.name = "fs_get_file_info";
+            tool.description = "Get metadata about a file or directory including size, modification time, "
+                             "and type.";
+            tool.parameters = {
+                {"path", "string", "Relative path to the file or directory", true}
+            };
+            tools.push_back(tool);
+        }
+        
+        // fs_search_files
+        {
+            ToolDefinition tool;
+            tool.name = "fs_search_files";
+            tool.description = "Search for files matching a name pattern. Supports wildcards (* and ?).";
+            tool.parameters = {
+                {"pattern", "string", "Filename pattern to search for (e.g., '*.cpp', 'test_*.py')", true},
+                {"path", "string", "Directory to search in (default: root)", false},
+                {"recursive", "boolean", "Search recursively (default: true)", false}
+            };
+            tools.push_back(tool);
+        }
+        
+        // fs_grep
+        {
+            ToolDefinition tool;
+            tool.name = "fs_grep";
+            tool.description = "Search for text within files. Returns matching lines with file paths and line numbers.";
+            tool.parameters = {
+                {"query", "string", "Text or pattern to search for", true},
+                {"path", "string", "Directory to search in (default: root)", false},
+                {"file_pattern", "string", "Only search files matching this pattern (e.g., '*.cpp')", false},
+                {"case_sensitive", "boolean", "Case sensitive search (default: false)", false},
+                {"max_results", "number", "Maximum number of results (default: 50)", false}
+            };
+            tools.push_back(tool);
+        }
+        
+        return tools;
+    }
+    
+    ToolResult executeTool(const std::string& toolName, const Value& arguments) override {
+        if (toolName == "fs_list_directory") {
+            return listDirectory(arguments);
+        } else if (toolName == "fs_read_file") {
+            return readFile(arguments);
+        } else if (toolName == "fs_read_file_lines") {
+            return readFileLines(arguments);
+        } else if (toolName == "fs_get_file_info") {
+            return getFileInfo(arguments);
+        } else if (toolName == "fs_search_files") {
+            return searchFiles(arguments);
+        } else if (toolName == "fs_grep") {
+            return grepFiles(arguments);
+        }
+        
+        return ToolResult::Error("Unknown tool: " + toolName);
+    }
+
+private:
+    std::string m_rootPath;
+    
+    /**
+     * Resolve a relative path to an absolute path within the sandbox.
+     * Returns empty string if path escapes the sandbox.
+     */
+    std::string resolvePath(const std::string& relativePath) const {
+        wxString rootStr = wxString(m_rootPath);
+        wxString relStr = wxString(relativePath);
+        wxFileName fn(rootStr, relStr);
+        fn.Normalize(wxPATH_NORM_DOTS | wxPATH_NORM_ABSOLUTE);
+        
+        std::string fullPath = fn.GetFullPath().ToStdString();
+        
+        // Security check: ensure path is within root
+        wxString rootPathStr = wxString(m_rootPath);
+        wxFileName rootFn(rootPathStr);
+        rootFn.Normalize(wxPATH_NORM_DOTS | wxPATH_NORM_ABSOLUTE);
+        std::string normalizedRoot = rootFn.GetFullPath().ToStdString();
+        
+        if (fullPath.find(normalizedRoot) != 0) {
+            return ""; // Path escapes sandbox
+        }
+        
+        return fullPath;
+    }
+    
+    /**
+     * Convert absolute path to relative path from root.
+     */
+    std::string toRelativePath(const std::string& absolutePath) const {
+        wxFileName fn(absolutePath);
+        fn.MakeRelativeTo(m_rootPath);
+        return fn.GetFullPath().ToStdString();
+    }
+    
+    /**
+     * Check if path is a valid, accessible location within sandbox.
+     */
+    bool isValidPath(const std::string& path) const {
+        if (path.empty()) return false;
+        return wxFileExists(path) || wxDirExists(path);
+    }
+    
+    // ========== Tool Implementations ==========
+    
+    ToolResult listDirectory(const Value& args) {
+        std::string relPath = args.has("path") ? args["path"].asString() : ".";
+        bool recursive = args.has("recursive") ? args["recursive"].asBool() : false;
+        int maxDepth = args.has("max_depth") ? args["max_depth"].asInt() : 3;
+        
+        std::string fullPath = resolvePath(relPath);
+        if (fullPath.empty()) {
+            return ToolResult::Error("Invalid path: access denied");
+        }
+        
+        if (!wxDirExists(fullPath)) {
+            return ToolResult::Error("Directory not found: " + relPath);
+        }
+        
+        Value result;
+        result["path"] = relPath;
+        result["entries"] = listDirectoryRecursive(fullPath, recursive, maxDepth, 0);
+        
+        return ToolResult::Success(result);
+    }
+    
+    Value listDirectoryRecursive(const std::string& path, bool recursive, int maxDepth, int currentDepth) {
+        Value entries;
+        
+        wxDir dir(path);
+        if (!dir.IsOpened()) {
+            return entries;
+        }
+        
+        wxString filename;
+        bool cont = dir.GetFirst(&filename);
+        
+        while (cont) {
+            // Skip hidden files
+            if (!filename.StartsWith(".")) {
+                std::string fullPath = wxFileName(path, filename).GetFullPath().ToStdString();
+                
+                Value entry;
+                entry["name"] = filename.ToStdString();
+                entry["path"] = toRelativePath(fullPath);
+                
+                if (wxDir::Exists(fullPath)) {
+                    entry["type"] = "directory";
+                    
+                    if (recursive && currentDepth < maxDepth) {
+                        entry["children"] = listDirectoryRecursive(fullPath, true, maxDepth, currentDepth + 1);
+                    }
+                } else {
+                    entry["type"] = "file";
+                    wxFileName fn(fullPath);
+                    entry["size"] = static_cast<double>(fn.GetSize().GetValue());
+                    entry["extension"] = fn.GetExt().ToStdString();
+                }
+                
+                entries.push_back(entry);
+            }
+            cont = dir.GetNext(&filename);
+        }
+        
+        return entries;
+    }
+    
+    ToolResult readFile(const Value& args) {
+        if (!args.has("path")) {
+            return ToolResult::Error("Missing required parameter: path");
+        }
+        
+        std::string relPath = args["path"].asString();
+        int maxSize = args.has("max_size") ? args["max_size"].asInt() : 100000;
+        
+        std::string fullPath = resolvePath(relPath);
+        if (fullPath.empty()) {
+            return ToolResult::Error("Invalid path: access denied");
+        }
+        
+        if (!wxFileExists(fullPath)) {
+            return ToolResult::Error("File not found: " + relPath);
+        }
+        
+        // Check file size
+        wxFileName fn(fullPath);
+        wxULongLong fileSize = fn.GetSize();
+        if (fileSize == wxInvalidSize) {
+            return ToolResult::Error("Could not determine file size");
+        }
+        
+        bool truncated = false;
+        size_t readSize = static_cast<size_t>(fileSize.GetValue());
+        if (readSize > static_cast<size_t>(maxSize)) {
+            readSize = maxSize;
+            truncated = true;
+        }
+        
+        // Read file
+        std::ifstream file(fullPath, std::ios::binary);
+        if (!file) {
+            return ToolResult::Error("Could not open file: " + relPath);
+        }
+        
+        std::string content(readSize, '\0');
+        file.read(&content[0], readSize);
+        content.resize(file.gcount());
+        
+        // Check if binary
+        bool isBinary = false;
+        for (char c : content) {
+            if (c == '\0' && &c != &content.back()) {
+                isBinary = true;
+                break;
+            }
+        }
+        
+        Value result;
+        result["path"] = relPath;
+        result["size"] = static_cast<double>(fileSize.GetValue());
+        result["truncated"] = truncated;
+        
+        if (isBinary) {
+            result["content"] = "[Binary file - content not displayed]";
+            result["binary"] = true;
+        } else {
+            result["content"] = content;
+            result["binary"] = false;
+        }
+        
+        return ToolResult::Success(result);
+    }
+    
+    ToolResult readFileLines(const Value& args) {
+        if (!args.has("path") || !args.has("start_line") || !args.has("end_line")) {
+            return ToolResult::Error("Missing required parameters: path, start_line, end_line");
+        }
+        
+        std::string relPath = args["path"].asString();
+        int startLine = args["start_line"].asInt();
+        int endLine = args["end_line"].asInt();
+        
+        if (startLine < 1 || endLine < startLine) {
+            return ToolResult::Error("Invalid line range");
+        }
+        
+        std::string fullPath = resolvePath(relPath);
+        if (fullPath.empty()) {
+            return ToolResult::Error("Invalid path: access denied");
+        }
+        
+        if (!wxFileExists(fullPath)) {
+            return ToolResult::Error("File not found: " + relPath);
+        }
+        
+        std::ifstream file(fullPath);
+        if (!file) {
+            return ToolResult::Error("Could not open file: " + relPath);
+        }
+        
+        std::string content;
+        std::string line;
+        int lineNum = 0;
+        int linesRead = 0;
+        
+        while (std::getline(file, line)) {
+            lineNum++;
+            if (lineNum >= startLine && lineNum <= endLine) {
+                if (!content.empty()) content += "\n";
+                content += line;
+                linesRead++;
+            }
+            if (lineNum > endLine) break;
+        }
+        
+        Value result;
+        result["path"] = relPath;
+        result["start_line"] = startLine;
+        result["end_line"] = std::min(endLine, lineNum);
+        result["total_lines"] = lineNum;
+        result["lines_read"] = linesRead;
+        result["content"] = content;
+        
+        return ToolResult::Success(result);
+    }
+    
+    ToolResult getFileInfo(const Value& args) {
+        if (!args.has("path")) {
+            return ToolResult::Error("Missing required parameter: path");
+        }
+        
+        std::string relPath = args["path"].asString();
+        std::string fullPath = resolvePath(relPath);
+        
+        if (fullPath.empty()) {
+            return ToolResult::Error("Invalid path: access denied");
+        }
+        
+        if (!isValidPath(fullPath)) {
+            return ToolResult::Error("Path not found: " + relPath);
+        }
+        
+        wxFileName fn(fullPath);
+        
+        Value result;
+        result["path"] = relPath;
+        result["name"] = fn.GetFullName().ToStdString();
+        result["exists"] = true;
+        
+        if (wxDir::Exists(fullPath)) {
+            result["type"] = "directory";
+            
+            // Count children
+            wxDir dir(fullPath);
+            if (dir.IsOpened()) {
+                int fileCount = 0;
+                int dirCount = 0;
+                wxString filename;
+                bool cont = dir.GetFirst(&filename);
+                while (cont) {
+                    if (!filename.StartsWith(".")) {
+                        if (wxDir::Exists(wxFileName(fullPath, filename).GetFullPath())) {
+                            dirCount++;
+                        } else {
+                            fileCount++;
+                        }
+                    }
+                    cont = dir.GetNext(&filename);
+                }
+                result["file_count"] = fileCount;
+                result["directory_count"] = dirCount;
+            }
+        } else {
+            result["type"] = "file";
+            result["size"] = static_cast<double>(fn.GetSize().GetValue());
+            result["extension"] = fn.GetExt().ToStdString();
+            
+            // Try to get modification time
+            wxDateTime modTime;
+            if (fn.GetTimes(nullptr, &modTime, nullptr)) {
+                result["modified"] = modTime.FormatISOCombined().ToStdString();
+            }
+            
+            // Count lines for text files
+            if (isLikelyTextFile(fn.GetExt().ToStdString())) {
+                std::ifstream file(fullPath);
+                int lineCount = 0;
+                std::string line;
+                while (std::getline(file, line)) {
+                    lineCount++;
+                }
+                result["line_count"] = lineCount;
+            }
+        }
+        
+        return ToolResult::Success(result);
+    }
+    
+    ToolResult searchFiles(const Value& args) {
+        if (!args.has("pattern")) {
+            return ToolResult::Error("Missing required parameter: pattern");
+        }
+        
+        std::string pattern = args["pattern"].asString();
+        std::string relPath = args.has("path") ? args["path"].asString() : ".";
+        bool recursive = args.has("recursive") ? args["recursive"].asBool() : true;
+        
+        std::string fullPath = resolvePath(relPath);
+        if (fullPath.empty()) {
+            return ToolResult::Error("Invalid path: access denied");
+        }
+        
+        if (!wxDirExists(fullPath)) {
+            return ToolResult::Error("Directory not found: " + relPath);
+        }
+        
+        Value results;
+        searchFilesRecursive(fullPath, pattern, recursive, results);
+        
+        Value result;
+        result["pattern"] = pattern;
+        result["search_path"] = relPath;
+        result["matches"] = results;
+        result["count"] = static_cast<int>(results.size());
+        
+        return ToolResult::Success(result);
+    }
+    
+    void searchFilesRecursive(const std::string& path, const std::string& pattern, 
+                              bool recursive, Value& results, int maxResults = 100) {
+        if (results.size() >= static_cast<size_t>(maxResults)) return;
+        
+        wxDir dir(path);
+        if (!dir.IsOpened()) return;
+        
+        wxString filename;
+        
+        // Search files
+        bool cont = dir.GetFirst(&filename, wxString(pattern), wxDIR_FILES);
+        while (cont && results.size() < static_cast<size_t>(maxResults)) {
+            if (!filename.StartsWith(".")) {
+                std::string fullPath = wxFileName(path, filename).GetFullPath().ToStdString();
+                Value entry;
+                entry["name"] = filename.ToStdString();
+                entry["path"] = toRelativePath(fullPath);
+                entry["type"] = "file";
+                wxFileName fn(fullPath);
+                entry["size"] = static_cast<double>(fn.GetSize().GetValue());
+                results.push_back(entry);
+            }
+            cont = dir.GetNext(&filename);
+        }
+        
+        // Recurse into directories
+        if (recursive) {
+            cont = dir.GetFirst(&filename, wxEmptyString, wxDIR_DIRS);
+            while (cont && results.size() < static_cast<size_t>(maxResults)) {
+                if (!filename.StartsWith(".")) {
+                    std::string subPath = wxFileName(path, filename).GetFullPath().ToStdString();
+                    searchFilesRecursive(subPath, pattern, true, results, maxResults);
+                }
+                cont = dir.GetNext(&filename);
+            }
+        }
+    }
+    
+    ToolResult grepFiles(const Value& args) {
+        if (!args.has("query")) {
+            return ToolResult::Error("Missing required parameter: query");
+        }
+        
+        std::string query = args["query"].asString();
+        std::string relPath = args.has("path") ? args["path"].asString() : ".";
+        std::string filePattern = args.has("file_pattern") ? args["file_pattern"].asString() : "*";
+        bool caseSensitive = args.has("case_sensitive") ? args["case_sensitive"].asBool() : false;
+        int maxResults = args.has("max_results") ? args["max_results"].asInt() : 50;
+        
+        std::string fullPath = resolvePath(relPath);
+        if (fullPath.empty()) {
+            return ToolResult::Error("Invalid path: access denied");
+        }
+        
+        if (!wxDirExists(fullPath)) {
+            return ToolResult::Error("Directory not found: " + relPath);
+        }
+        
+        Value matches;
+        std::string searchQuery = caseSensitive ? query : toLower(query);
+        
+        grepFilesRecursive(fullPath, searchQuery, filePattern, caseSensitive, matches, maxResults);
+        
+        Value result;
+        result["query"] = query;
+        result["search_path"] = relPath;
+        result["matches"] = matches;
+        result["count"] = static_cast<int>(matches.size());
+        result["truncated"] = (matches.size() >= static_cast<size_t>(maxResults));
+        
+        return ToolResult::Success(result);
+    }
+    
+    void grepFilesRecursive(const std::string& path, const std::string& query,
+                           const std::string& filePattern, bool caseSensitive,
+                           Value& matches, int maxResults) {
+        if (matches.size() >= static_cast<size_t>(maxResults)) return;
+        
+        wxDir dir(path);
+        if (!dir.IsOpened()) return;
+        
+        wxString filename;
+        
+        // Search in files
+        bool cont = dir.GetFirst(&filename, wxString(filePattern), wxDIR_FILES);
+        while (cont && matches.size() < static_cast<size_t>(maxResults)) {
+            if (!filename.StartsWith(".")) {
+                std::string filePath = wxFileName(path, filename).GetFullPath().ToStdString();
+                
+                // Only search text files
+                wxFileName fn(filePath);
+                if (isLikelyTextFile(fn.GetExt().ToStdString())) {
+                    grepFile(filePath, query, caseSensitive, matches, maxResults);
+                }
+            }
+            cont = dir.GetNext(&filename);
+        }
+        
+        // Recurse into directories
+        cont = dir.GetFirst(&filename, wxEmptyString, wxDIR_DIRS);
+        while (cont && matches.size() < static_cast<size_t>(maxResults)) {
+            if (!filename.StartsWith(".") && filename != "node_modules" && filename != ".git") {
+                std::string subPath = wxFileName(path, filename).GetFullPath().ToStdString();
+                grepFilesRecursive(subPath, query, filePattern, caseSensitive, matches, maxResults);
+            }
+            cont = dir.GetNext(&filename);
+        }
+    }
+    
+    void grepFile(const std::string& filePath, const std::string& query,
+                  bool caseSensitive, Value& matches, int maxResults) {
+        std::ifstream file(filePath);
+        if (!file) return;
+        
+        std::string line;
+        int lineNum = 0;
+        
+        while (std::getline(file, line) && matches.size() < static_cast<size_t>(maxResults)) {
+            lineNum++;
+            
+            std::string searchLine = caseSensitive ? line : toLower(line);
+            size_t pos = searchLine.find(query);
+            
+            if (pos != std::string::npos) {
+                Value match;
+                match["file"] = toRelativePath(filePath);
+                match["line"] = lineNum;
+                match["column"] = static_cast<int>(pos + 1);
+                
+                // Trim long lines
+                std::string content = line;
+                if (content.length() > 200) {
+                    size_t start = pos > 50 ? pos - 50 : 0;
+                    content = "..." + content.substr(start, 150) + "...";
+                }
+                match["content"] = content;
+                
+                matches.push_back(match);
+            }
+        }
+    }
+    
+    // ========== Utility Functions ==========
+    
+    std::string toLower(const std::string& str) const {
+        std::string result = str;
+        for (char& c : result) {
+            if (c >= 'A' && c <= 'Z') {
+                c = c - 'A' + 'a';
+            }
+        }
+        return result;
+    }
+    
+    bool isLikelyTextFile(const std::string& ext) const {
+        static const std::set<std::string> textExtensions = {
+            "txt", "md", "markdown", "rst", "json", "xml", "yaml", "yml",
+            "html", "htm", "css", "js", "ts", "jsx", "tsx", "vue", "svelte",
+            "c", "cpp", "cc", "cxx", "h", "hpp", "hxx",
+            "java", "kt", "kts", "scala", "groovy",
+            "py", "pyw", "pyx", "pxd", "pxi",
+            "rb", "rake", "gemspec",
+            "rs", "go", "swift", "m", "mm",
+            "php", "pl", "pm", "lua",
+            "sh", "bash", "zsh", "fish",
+            "sql", "graphql", "gql",
+            "r", "R", "rmd", "Rmd",
+            "tex", "bib",
+            "toml", "ini", "cfg", "conf",
+            "cmake", "make", "makefile",
+            "dockerfile", "containerfile",
+            "gitignore", "gitattributes", "editorconfig",
+            "env", "properties",
+            "log", "csv", "tsv",
+            ""  // Files without extension
+        };
+        
+        std::string lowerExt = toLower(ext);
+        return textExtensions.find(lowerExt) != textExtensions.end();
+    }
+};
+
+} // namespace MCP
+
+#endif // MCP_FILESYSTEM_H

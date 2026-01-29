@@ -3,6 +3,7 @@
 
 #include "../http/http_client.h"
 #include "../config/config.h"
+#include "../mcp/mcp.h"
 #include <string>
 #include <vector>
 #include <functional>
@@ -51,7 +52,13 @@ struct GeminiResponse {
     int promptTokens = 0;       // Tokens used in prompt
     int completionTokens = 0;   // Tokens in completion
     
+    // Function calling support
+    bool hasFunctionCall = false;
+    std::string functionName;
+    std::string functionArgs;   // JSON string of arguments
+    
     bool isOk() const { return success && error.empty(); }
+    bool needsFunctionCall() const { return success && hasFunctionCall; }
 };
 
 /**
@@ -65,6 +72,10 @@ struct GeminiConfig {
     float topP = 0.95f;
     int topK = 40;
     std::string systemInstruction;
+    
+    // MCP/Function calling settings
+    bool enableMCP = true;      // Enable MCP tool calling
+    int maxToolCalls = 5;       // Maximum tool calls per response
     
     // Safety settings - block thresholds
     // Options: BLOCK_NONE, BLOCK_ONLY_HIGH, BLOCK_MEDIUM_AND_ABOVE, BLOCK_LOW_AND_ABOVE
@@ -271,6 +282,22 @@ public:
     }
     
     /**
+     * Enable or disable MCP tool calling.
+     */
+    void SetMCPEnabled(bool enabled) {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_config.enableMCP = enabled;
+    }
+    
+    /**
+     * Check if MCP tool calling is enabled.
+     */
+    bool IsMCPEnabled() const {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_config.enableMCP;
+    }
+    
+    /**
      * Send a message in the current conversation and get a response.
      * The message and response are added to the conversation history.
      * 
@@ -294,15 +321,59 @@ public:
         GeminiResponse response = GenerateFromMessages(messages);
         
         // Add model response to history if successful
-        if (response.isOk()) {
+        if (response.isOk() && !response.hasFunctionCall) {
             std::lock_guard<std::mutex> lock(m_mutex);
             m_conversationHistory.emplace_back(MessageRole::Model, response.text);
-        } else {
+        } else if (!response.isOk()) {
             // Remove the failed user message
             std::lock_guard<std::mutex> lock(m_mutex);
             if (!m_conversationHistory.empty()) {
                 m_conversationHistory.pop_back();
             }
+        }
+        // Note: For function calls, the caller is responsible for handling the tool
+        // response and continuing the conversation
+        
+        return response;
+    }
+    
+    /**
+     * Continue a conversation after a function call with the tool result.
+     * This is used when the AI requests a tool call - execute the tool,
+     * then call this method with the result to get the AI's final response.
+     * 
+     * @param functionName The name of the function that was called
+     * @param result The result from the tool execution (as JSON string)
+     * @return GeminiResponse with the model's continued reply
+     */
+    GeminiResponse ContinueWithToolResult(const std::string& functionName, 
+                                          const std::string& result) {
+        // Build the function response message
+        // In the conversation history, we need to add:
+        // 1. The model's function call (as a model message)
+        // 2. The function response (as a special format)
+        
+        std::string toolResponseContent = "[Tool Result for " + functionName + "]\n" + result;
+        
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            // Add the tool result as a user message (this is how Gemini expects it)
+            m_conversationHistory.emplace_back(MessageRole::User, toolResponseContent);
+        }
+        
+        // Generate continuation
+        std::vector<ChatMessage> messages;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            messages = m_conversationHistory;
+        }
+        
+        // For the continuation, we might not need tools again
+        GeminiResponse response = GenerateFromMessages(messages);
+        
+        if (response.isOk() && !response.hasFunctionCall) {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_conversationHistory.emplace_back(MessageRole::Model, response.text);
         }
         
         return response;
@@ -374,6 +445,13 @@ private:
      * Build the request JSON body for the Gemini API.
      */
     std::string BuildRequestBody(const std::vector<ChatMessage>& messages) const {
+        return BuildRequestBodyWithTools(messages, m_config.enableMCP);
+    }
+    
+    /**
+     * Build the request JSON body for the Gemini API with optional tools.
+     */
+    std::string BuildRequestBodyWithTools(const std::vector<ChatMessage>& messages, bool includeTools) const {
         std::string json = "{";
         
         // Contents array
@@ -392,6 +470,14 @@ private:
         if (!m_config.systemInstruction.empty()) {
             json += ",\"systemInstruction\":{\"parts\":[{\"text\":\"" 
                  + EscapeJson(m_config.systemInstruction) + "\"}]}";
+        }
+        
+        // Add MCP tools if enabled
+        if (includeTools) {
+            std::string toolsJson = MCP::Registry::Instance().buildGeminiToolsJson();
+            if (!toolsJson.empty()) {
+                json += "," + toolsJson;
+            }
         }
         
         // Generation config
@@ -438,6 +524,43 @@ private:
             if (result.error.empty()) {
                 result.error = "API returned an error (HTTP " + std::to_string(httpCode) + ")";
             }
+            return result;
+        }
+        
+        // Check for function call response
+        size_t functionCallPos = responseBody.find("\"functionCall\"");
+        if (functionCallPos != std::string::npos) {
+            result.hasFunctionCall = true;
+            result.success = true;
+            
+            // Extract function name
+            size_t namePos = responseBody.find("\"name\"", functionCallPos);
+            if (namePos != std::string::npos) {
+                namePos = responseBody.find("\"", namePos + 6) + 1;
+                size_t nameEnd = responseBody.find("\"", namePos);
+                if (nameEnd != std::string::npos) {
+                    result.functionName = responseBody.substr(namePos, nameEnd - namePos);
+                }
+            }
+            
+            // Extract function arguments (as JSON object)
+            size_t argsPos = responseBody.find("\"args\"", functionCallPos);
+            if (argsPos != std::string::npos) {
+                // Find the opening brace of the args object
+                size_t braceStart = responseBody.find("{", argsPos);
+                if (braceStart != std::string::npos) {
+                    // Find matching closing brace
+                    int braceCount = 1;
+                    size_t braceEnd = braceStart + 1;
+                    while (braceEnd < responseBody.size() && braceCount > 0) {
+                        if (responseBody[braceEnd] == '{') braceCount++;
+                        else if (responseBody[braceEnd] == '}') braceCount--;
+                        braceEnd++;
+                    }
+                    result.functionArgs = responseBody.substr(braceStart, braceEnd - braceStart);
+                }
+            }
+            
             return result;
         }
         

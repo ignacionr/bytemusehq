@@ -7,11 +7,14 @@
 #include "../commands/command.h"
 #include "../commands/command_registry.h"
 #include "../ai/gemini_client.h"
+#include "../mcp/mcp.h"
+#include "../mcp/mcp_filesystem.h"
 #include <wx/dcbuffer.h>
 #include <wx/timer.h>
 #include <wx/textctrl.h>
 #include <wx/button.h>
 #include <wx/choice.h>
+#include <wx/checkbox.h>
 #include <wx/stattext.h>
 #include <wx/scrolwin.h>
 #include <wx/wrapsizer.h>
@@ -250,6 +253,22 @@ public:
         
         mainSizer->Add(headerSizer, 0, wxEXPAND | wxALL, 8);
         
+        // MCP tools toggle row
+        wxBoxSizer* mcpSizer = new wxBoxSizer(wxHORIZONTAL);
+        m_mcpCheckbox = new wxCheckBox(m_panel, wxID_ANY, wxT("\U0001F4C1 File Access")); // 📁
+        m_mcpCheckbox->SetValue(true);
+        m_mcpCheckbox->SetToolTip("Allow AI to read files in the current workspace");
+        mcpSizer->Add(m_mcpCheckbox, 0, wxALIGN_CENTER_VERTICAL);
+        
+        m_mcpStatusLabel = new wxStaticText(m_panel, wxID_ANY, "");
+        wxFont mcpStatusFont = m_mcpStatusLabel->GetFont();
+        mcpStatusFont.SetPointSize(8);
+        m_mcpStatusLabel->SetFont(mcpStatusFont);
+        m_mcpStatusLabel->SetForegroundColour(wxColour(100, 180, 100));
+        mcpSizer->Add(m_mcpStatusLabel, 1, wxLEFT | wxALIGN_CENTER_VERTICAL, 8);
+        
+        mainSizer->Add(mcpSizer, 0, wxEXPAND | wxLEFT | wxRIGHT, 8);
+        
         // Status label
         m_statusLabel = new wxStaticText(m_panel, wxID_ANY, "");
         wxFont statusFont = m_statusLabel->GetFont();
@@ -292,6 +311,7 @@ public:
         m_sendBtn->Bind(wxEVT_BUTTON, &GeminiChatWidget::OnSendMessage, this);
         m_clearBtn->Bind(wxEVT_BUTTON, &GeminiChatWidget::OnClearChat, this);
         m_modelChoice->Bind(wxEVT_CHOICE, &GeminiChatWidget::OnModelChanged, this);
+        m_mcpCheckbox->Bind(wxEVT_CHECKBOX, &GeminiChatWidget::OnMCPToggle, this);
         m_inputText->Bind(wxEVT_TEXT_ENTER, &GeminiChatWidget::OnSendMessage, this);
         m_inputText->Bind(wxEVT_KEY_DOWN, &GeminiChatWidget::OnKeyDown, this);
         
@@ -304,6 +324,9 @@ public:
         // Load config and check API key
         LoadConfig();
         UpdateApiKeyWarning();
+        
+        // Initialize MCP filesystem provider
+        InitializeMCP();
         
         // Add welcome message
         AddMessageBubble("Hello! I'm Gemini, your AI assistant. How can I help you today?", false);
@@ -447,7 +470,9 @@ private:
     wxStaticText* m_headerLabel = nullptr;
     wxStaticText* m_statusLabel = nullptr;
     wxStaticText* m_apiKeyWarning = nullptr;
+    wxStaticText* m_mcpStatusLabel = nullptr;
     wxChoice* m_modelChoice = nullptr;
+    wxCheckBox* m_mcpCheckbox = nullptr;
     wxButton* m_clearBtn = nullptr;
     wxButton* m_sendBtn = nullptr;
     wxScrolledWindow* m_chatPanel = nullptr;
@@ -461,13 +486,67 @@ private:
     wxTimer m_responseTimer;
     std::atomic<bool> m_isLoading{false};
     
+    // MCP filesystem provider
+    std::shared_ptr<MCP::FilesystemProvider> m_fsProvider;
+    
     // Thread-safe response queue
     std::mutex m_responseMutex;
     struct PendingResponse {
         wxString text;
         bool isError;
+        bool isToolCall;
+        wxString toolName;
+        wxString toolArgs;
     };
     std::queue<PendingResponse> m_pendingResponses;
+    
+    /**
+     * Initialize MCP filesystem provider with current working directory.
+     */
+    void InitializeMCP() {
+        // Create filesystem provider with current working directory
+        m_fsProvider = std::make_shared<MCP::FilesystemProvider>(wxGetCwd().ToStdString());
+        
+        // Register with MCP registry
+        MCP::Registry::Instance().registerProvider(m_fsProvider);
+        
+        // Enable MCP in Gemini client
+        AI::GeminiClient::Instance().SetMCPEnabled(true);
+        
+        // Set system instruction to inform the AI about available tools
+        std::string systemInstruction = 
+            "You are a helpful AI assistant integrated into a code editor. "
+            "You have access to the user's workspace files through several tools:\n\n"
+            "- fs_list_directory: List files and folders in a directory\n"
+            "- fs_read_file: Read the complete contents of a file\n"
+            "- fs_read_file_lines: Read specific line ranges from a file\n"
+            "- fs_get_file_info: Get metadata about a file (size, type, line count)\n"
+            "- fs_search_files: Search for files by name pattern (e.g., '*.cpp')\n"
+            "- fs_grep: Search for text content within files\n\n"
+            "When the user asks about their code, project structure, or file contents, "
+            "USE THESE TOOLS to read and explore their files. Don't say you can't access files - you can! "
+            "Start by listing the directory or reading relevant files to answer their questions accurately.\n\n"
+            "The workspace root is: " + m_fsProvider->getRootPath();
+        
+        AI::GeminiClient::Instance().SetSystemInstruction(systemInstruction);
+        
+        UpdateMCPStatus();
+    }
+    
+    /**
+     * Update MCP status label.
+     */
+    void UpdateMCPStatus() {
+        if (!m_mcpStatusLabel) return;
+        
+        if (m_mcpCheckbox && m_mcpCheckbox->GetValue()) {
+            m_mcpStatusLabel->SetLabel(wxT("\u2713 Workspace: ") + wxString(m_fsProvider->getRootPath()));
+            m_mcpStatusLabel->SetForegroundColour(wxColour(100, 180, 100));
+        } else {
+            m_mcpStatusLabel->SetLabel("");
+        }
+        m_panel->Layout();
+    }
     
     void LoadConfig() {
         AI::GeminiClient::Instance().LoadFromConfig();
@@ -543,23 +622,163 @@ private:
         // Send message in background thread
         std::string msgStr = message.ToStdString();
         std::thread([this, msgStr]() {
-            AI::GeminiResponse response = AI::GeminiClient::Instance().SendMessage(msgStr);
-            
-            // Queue response for UI thread
-            {
-                std::lock_guard<std::mutex> lock(m_responseMutex);
-                if (response.isOk()) {
-                    m_pendingResponses.push({wxString(response.text), false});
-                } else {
-                    m_pendingResponses.push({wxString(response.error), true});
-                }
-            }
-            
-            m_isLoading = false;
+            ProcessMessageWithMCP(msgStr);
         }).detach();
         
         // Start timer to check for responses
         m_responseTimer.Start(100);
+    }
+    
+    /**
+     * Process a message, handling MCP tool calls if needed.
+     * This runs in a background thread.
+     */
+    void ProcessMessageWithMCP(const std::string& message) {
+        AI::GeminiResponse response = AI::GeminiClient::Instance().SendMessage(message);
+        
+        // Handle tool calls in a loop (up to max iterations)
+        int toolCallCount = 0;
+        const int maxToolCalls = 5;
+        
+        while (response.needsFunctionCall() && toolCallCount < maxToolCalls) {
+            toolCallCount++;
+            
+            // Notify UI about tool call
+            {
+                std::lock_guard<std::mutex> lock(m_responseMutex);
+                PendingResponse toolNotify;
+                toolNotify.text = wxT("\U0001F527 Using tool: ") + wxString(response.functionName); // 🔧
+                toolNotify.isError = false;
+                toolNotify.isToolCall = true;
+                toolNotify.toolName = wxString(response.functionName);
+                toolNotify.toolArgs = wxString(response.functionArgs);
+                m_pendingResponses.push(toolNotify);
+            }
+            
+            // Parse arguments and execute tool
+            MCP::Value args = ParseJsonArgs(response.functionArgs);
+            MCP::ToolResult toolResult = MCP::Registry::Instance().executeTool(
+                response.functionName, args);
+            
+            // Format tool result
+            std::string resultStr;
+            if (toolResult.success) {
+                resultStr = toolResult.result.toJson();
+            } else {
+                resultStr = "{\"error\": \"" + toolResult.error + "\"}";
+            }
+            
+            // Continue conversation with tool result
+            response = AI::GeminiClient::Instance().ContinueWithToolResult(
+                response.functionName, resultStr);
+        }
+        
+        // Queue final response for UI thread
+        {
+            std::lock_guard<std::mutex> lock(m_responseMutex);
+            if (response.isOk() && !response.hasFunctionCall) {
+                m_pendingResponses.push({wxString(response.text), false, false, "", ""});
+            } else if (response.hasFunctionCall) {
+                m_pendingResponses.push({
+                    wxString("Reached maximum tool calls. Last response may be incomplete."), 
+                    true, false, "", ""});
+            } else {
+                m_pendingResponses.push({wxString(response.error), true, false, "", ""});
+            }
+        }
+        
+        m_isLoading = false;
+    }
+    
+    /**
+     * Parse JSON arguments string into MCP::Value.
+     * Simple recursive parser for the arguments object.
+     */
+    MCP::Value ParseJsonArgs(const std::string& json) {
+        MCP::Value result;
+        if (json.empty() || json[0] != '{') return result;
+        
+        // Very basic JSON object parser
+        size_t pos = 1;
+        while (pos < json.size()) {
+            // Skip whitespace
+            while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\n' || json[pos] == '\r' || json[pos] == '\t')) {
+                pos++;
+            }
+            
+            if (pos >= json.size() || json[pos] == '}') break;
+            
+            // Skip comma
+            if (json[pos] == ',') {
+                pos++;
+                continue;
+            }
+            
+            // Parse key
+            if (json[pos] != '"') break;
+            pos++;
+            size_t keyStart = pos;
+            while (pos < json.size() && json[pos] != '"') pos++;
+            std::string key = json.substr(keyStart, pos - keyStart);
+            pos++; // skip closing quote
+            
+            // Skip colon
+            while (pos < json.size() && json[pos] != ':') pos++;
+            pos++;
+            
+            // Skip whitespace
+            while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\n' || json[pos] == '\r' || json[pos] == '\t')) {
+                pos++;
+            }
+            
+            // Parse value
+            if (pos >= json.size()) break;
+            
+            if (json[pos] == '"') {
+                // String value
+                pos++;
+                size_t valStart = pos;
+                while (pos < json.size() && json[pos] != '"') {
+                    if (json[pos] == '\\' && pos + 1 < json.size()) pos++; // skip escaped char
+                    pos++;
+                }
+                std::string val = json.substr(valStart, pos - valStart);
+                // Unescape basic sequences
+                std::string unescaped;
+                for (size_t i = 0; i < val.size(); i++) {
+                    if (val[i] == '\\' && i + 1 < val.size()) {
+                        if (val[i+1] == 'n') { unescaped += '\n'; i++; }
+                        else if (val[i+1] == 't') { unescaped += '\t'; i++; }
+                        else if (val[i+1] == '"') { unescaped += '"'; i++; }
+                        else if (val[i+1] == '\\') { unescaped += '\\'; i++; }
+                        else unescaped += val[i];
+                    } else {
+                        unescaped += val[i];
+                    }
+                }
+                result[key] = unescaped;
+                pos++;
+            } else if (json[pos] == 't' || json[pos] == 'f') {
+                // Boolean value
+                bool val = (json[pos] == 't');
+                while (pos < json.size() && json[pos] != ',' && json[pos] != '}') pos++;
+                result[key] = val;
+            } else if (json[pos] == '-' || (json[pos] >= '0' && json[pos] <= '9')) {
+                // Number value
+                size_t numStart = pos;
+                while (pos < json.size() && (json[pos] == '-' || json[pos] == '.' || 
+                       (json[pos] >= '0' && json[pos] <= '9'))) {
+                    pos++;
+                }
+                double val = std::stod(json.substr(numStart, pos - numStart));
+                result[key] = val;
+            } else {
+                // Skip unknown value types
+                while (pos < json.size() && json[pos] != ',' && json[pos] != '}') pos++;
+            }
+        }
+        
+        return result;
     }
     
     void OnResponseTimer(wxTimerEvent& event) {
@@ -577,9 +796,15 @@ private:
         }
         
         if (hasResponse) {
-            AddMessageBubble(response.text, false, response.isError);
-            UpdateStatus("");
-            m_sendBtn->Enable(AI::GeminiClient::Instance().HasApiKey());
+            if (response.isToolCall) {
+                // Show tool call notification as a system message
+                AddToolCallBubble(response.toolName, response.toolArgs);
+                UpdateStatus(wxT("\U0001F504 Executing tool...")); // 🔄
+            } else {
+                AddMessageBubble(response.text, false, response.isError);
+                UpdateStatus("");
+                m_sendBtn->Enable(AI::GeminiClient::Instance().HasApiKey());
+            }
             
             if (m_pendingResponses.empty() && !m_isLoading) {
                 m_responseTimer.Stop();
@@ -591,6 +816,28 @@ private:
         }
     }
     
+    /**
+     * Add a tool call notification bubble.
+     */
+    void AddToolCallBubble(const wxString& toolName, const wxString& args) {
+        wxString text = wxT("\U0001F527 Tool: ") + toolName; // 🔧
+        
+        // Add truncated args preview
+        if (!args.IsEmpty()) {
+            wxString preview = args.Left(100);
+            if (args.Length() > 100) preview += "...";
+            text += "\n" + preview;
+        }
+        
+        // Create a special bubble with different styling
+        auto* bubble = new ChatMessageBubble(m_chatPanel, text, false, false);
+        bubble->SetThemeColors(m_bgColor, wxColour(180, 180, 220)); // Light purple for tool calls
+        m_chatSizer->Add(bubble, 0, wxEXPAND | wxALL, 5);
+        m_chatPanel->Layout();
+        m_chatPanel->FitInside();
+        m_chatPanel->Scroll(-1, m_chatPanel->GetVirtualSize().GetHeight());
+    }
+    
     void OnClearChat(wxCommandEvent& event) {
         ClearConversation();
     }
@@ -599,6 +846,17 @@ private:
         wxString model = m_modelChoice->GetStringSelection();
         AI::GeminiClient::Instance().SetModel(model.ToStdString());
         AI::GeminiClient::Instance().SaveToConfig();
+    }
+    
+    void OnMCPToggle(wxCommandEvent& event) {
+        bool enabled = m_mcpCheckbox->GetValue();
+        AI::GeminiClient::Instance().SetMCPEnabled(enabled);
+        
+        if (m_fsProvider) {
+            m_fsProvider->setEnabled(enabled);
+        }
+        
+        UpdateMCPStatus();
     }
     
     void OnChatPanelResize(wxSizeEvent& event) {
