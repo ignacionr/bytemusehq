@@ -347,10 +347,15 @@ void MainFrame::RegisterWidgets()
     // Set up widget context with frame references
     m_widgetContext.Set<wxWindow>("window", this);
     m_widgetContext.Set<MainFrame>("mainFrame", this);
+    // Note: editorComponent is set in SetupSidebarWidgets after SetupUI creates the editor
 }
 
 void MainFrame::SetupSidebarWidgets()
 {
+    // Set editor in widget context now that it's created
+    m_widgetContext.Set<Editor>("editorComponent", m_editor);
+    m_widgetContext.Set<wxString>("workspaceRoot", new wxString(wxGetCwd()));
+    
     // Get all sidebar widgets from the registry and add them to the widget bar
     auto& registry = WidgetRegistry::Instance();
     auto sidebarWidgets = registry.GetWidgetsByLocation(WidgetLocation::Sidebar);

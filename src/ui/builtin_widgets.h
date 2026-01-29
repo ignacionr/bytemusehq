@@ -22,6 +22,7 @@
 #include "timer_widget.h"
 #include "jira_widget.h"
 #include "gemini_chat_widget.h"
+#include "symbols_widget.h"
 
 namespace BuiltinWidgets {
 
@@ -59,6 +60,10 @@ inline void RegisterAll() {
     
     registry.Register("core.geminiChat", []() -> WidgetPtr {
         return std::make_shared<GeminiChatWidget>();
+    });
+    
+    registry.Register("core.symbols", []() -> WidgetPtr {
+        return std::make_shared<SymbolsWidget>();
     });
 }
 

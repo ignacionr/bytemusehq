@@ -43,3 +43,6 @@ Thumbs.db
 # Project specific
 *.user
 *.qbs.user
+
+# clangd indexing
+.cache
