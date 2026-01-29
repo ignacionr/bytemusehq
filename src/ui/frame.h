@@ -33,6 +33,9 @@ public:
     // Get the terminal component
     Terminal* GetTerminal() { return m_terminal; }
     
+    // Open a folder in the tree and change working directory
+    void OpenFolder(const wxString& path);
+    
     // Terminal visibility
     void ShowTerminal(bool show = true);
     void ToggleTerminal();

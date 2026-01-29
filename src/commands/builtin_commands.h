@@ -8,6 +8,7 @@
 #include "../config/config.h"
 #include <wx/stc/stc.h>
 #include <wx/filedlg.h>
+#include <wx/dirdlg.h>
 #include <wx/msgdlg.h>
 #include <wx/textdlg.h>
 #include <wx/aboutdlg.h>
@@ -80,6 +81,23 @@ inline void RegisterAll() {
                     editor->SetText(content);
                     editor->EmptyUndoBuffer();
                 }
+            }
+        }
+    ));
+
+    registry.Register(MakeCommand(
+        "file.openFolder", "Open Folder...", "File", "Ctrl+Shift+O",
+        "Open a folder in the file tree",
+        [](CommandContext& ctx) {
+            auto* window = ctx.Get<wxWindow>("window");
+            auto* frame = static_cast<MainFrame*>(ctx.Get<wxWindow>("mainFrame"));
+            if (!window || !frame) return;
+
+            wxDirDialog dlg(window, "Open Folder", wxGetCwd(),
+                           wxDD_DEFAULT_STYLE | wxDD_DIR_MUST_EXIST);
+
+            if (dlg.ShowModal() == wxID_OK) {
+                frame->OpenFolder(dlg.GetPath());
             }
         }
     ));

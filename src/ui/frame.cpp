@@ -655,3 +655,27 @@ void MainFrame::OnToggleTerminal(wxCommandEvent& event)
 {
     ToggleTerminal();
 }
+
+void MainFrame::OpenFolder(const wxString& path)
+{
+    if (!wxDir::Exists(path)) return;
+    
+    // Change the current working directory
+    wxSetWorkingDirectory(path);
+    
+    // Update terminal working directory
+    if (m_terminal) {
+        m_terminal->SetWorkingDirectory(path);
+    }
+    
+    // Clear the existing tree
+    m_treeCtrl->DeleteAllItems();
+    
+    // Populate tree with the new directory
+    wxTreeItemId rootId = m_treeCtrl->AddRoot(path);
+    PopulateTree(path, rootId);
+    m_treeCtrl->Expand(rootId);
+    
+    // Update the window title to reflect the change
+    UpdateTitle();
+}
