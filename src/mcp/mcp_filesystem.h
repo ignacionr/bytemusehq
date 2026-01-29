@@ -10,6 +10,14 @@
 #include <fstream>
 #include <sstream>
 
+#ifdef _WIN32
+#include <io.h>
+#define popen _popen
+#define pclose _pclose
+#else
+#include <sys/wait.h>
+#endif
+
 namespace MCP {
 
 /**
@@ -270,7 +278,11 @@ private:
         }
         
         int status = pclose(pipe);
+#ifdef _WIN32
+        int exitCode = status;
+#else
         int exitCode = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+#endif
         
         // Remove trailing newline
         while (!output.empty() && (output.back() == '\n' || output.back() == '\r')) {
