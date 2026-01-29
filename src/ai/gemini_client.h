@@ -4,6 +4,7 @@
 #include "../http/http_client.h"
 #include "../config/config.h"
 #include "../mcp/mcp.h"
+#include <wx/log.h>
 #include <string>
 #include <vector>
 #include <functional>
@@ -285,11 +286,17 @@ public:
         auto& cfg = Config::Instance();
         std::lock_guard<std::mutex> lock(m_mutex);
         
+        wxLogDebug("AI: Loading configuration from config system");
+        
         // Load provider settings
         std::string providerStr = cfg.GetString("ai.provider", "gemini").ToStdString();
         m_config.provider = GeminiConfig::parseProvider(providerStr);
         m_config.baseUrl = cfg.GetString("ai.baseUrl", "").ToStdString();
         m_config.apiKey = cfg.GetString("ai.apiKey", "").ToStdString();
+        
+        wxLogDebug("AI: Provider=%s, BaseUrl=%s, ApiKey=%s",
+                   providerStr, m_config.baseUrl,
+                   m_config.apiKey.empty() ? "(not set)" : "(set)");
         
         // Fallback to legacy gemini-specific key if new key not set
         if (m_config.apiKey.empty()) {
@@ -487,18 +494,23 @@ public:
             config = m_config;
         }
         
+        wxLogDebug("AI: FetchAvailableModels() for provider %s", config.providerName());
+        
         // Need API key to fetch models
         if (config.apiKey.empty()) {
+            wxLogWarning("AI: Cannot fetch models - API key not configured");
             return GetFallbackModels(config.provider);
         }
         
         // For Cortex, also need base URL
         if (config.provider == AIProvider::Cortex && config.baseUrl.empty()) {
+            wxLogWarning("AI: Cannot fetch Cortex models - base URL not configured");
             return GetFallbackModels(config.provider);
         }
         
         Http::HttpClient& httpClient = Http::getHttpClient();
         if (!httpClient.isAvailable()) {
+            wxLogError("AI: HTTP client not available (backend: %s)", httpClient.backendName());
             return GetFallbackModels(config.provider);
         }
         
@@ -513,11 +525,17 @@ public:
             request.url = config.getEffectiveBaseUrl() + "/models?key=" + config.apiKey;
         }
         
+        wxLogDebug("AI: Fetching models from %s", request.url);
         Http::HttpResponse response = httpClient.perform(request);
         
         if (!response.error.empty() || response.statusCode != 200) {
+            wxLogError("AI: Failed to fetch models - HTTP %ld, error: %s",
+                       response.statusCode, response.error);
             return GetFallbackModels(config.provider);
         }
+        
+        wxLogDebug("AI: Models response received (HTTP %ld, %zu bytes)",
+                   response.statusCode, response.body.size());
         
         // Parse models from response
         std::vector<std::string> models;
@@ -1043,15 +1061,20 @@ private:
             config = m_config;
         }
         
+        wxLogDebug("AI: GenerateFromMessages() with %zu messages, provider=%s, model=%s",
+                   messages.size(), config.providerName(), config.model);
+        
         // Validate API key
         if (config.apiKey.empty()) {
             result.error = "API key not configured. Set ai.apiKey in config.";
+            wxLogError("AI: %s", result.error);
             return result;
         }
         
         // Validate base URL for Cortex
         if (config.provider == AIProvider::Cortex && config.baseUrl.empty()) {
             result.error = "Base URL not configured. Set ai.baseUrl in config for Cortex.";
+            wxLogError("AI: %s", result.error);
             return result;
         }
         
@@ -1059,8 +1082,11 @@ private:
         Http::HttpClient& httpClient = Http::getHttpClient();
         if (!httpClient.isAvailable()) {
             result.error = "HTTP client not available";
+            wxLogError("AI: HTTP client not available (backend: %s)", httpClient.backendName());
             return result;
         }
+        
+        wxLogDebug("AI: Using HTTP backend: %s", httpClient.backendName());
         
         // Build request based on provider
         Http::HttpRequest request;
@@ -1073,26 +1099,59 @@ private:
             request.url = config.baseUrl + "/v1/chat/completions";
             request.headers["Authorization"] = "Bearer " + config.apiKey;
             request.body = BuildCortexRequestBody(messages, config);
+            wxLogDebug("AI: Cortex request to %s", request.url);
         } else {
             // Google Gemini API
             std::string baseUrl = config.getEffectiveBaseUrl();
             request.url = baseUrl + "/models/" + config.model + ":generateContent?key=" + config.apiKey;
             request.body = BuildRequestBody(messages);
+            wxLogDebug("AI: Gemini request to %s/models/%s:generateContent", baseUrl, config.model);
         }
         
+        wxLogDebug("AI: Request body size: %zu bytes", request.body.size());
+        
         Http::HttpResponse httpResponse = httpClient.perform(request);
+        
+        wxLogDebug("AI: HTTP response - status=%ld, body=%zu bytes, error=%s",
+                   httpResponse.statusCode, httpResponse.body.size(),
+                   httpResponse.error.empty() ? "(none)" : httpResponse.error.c_str());
         
         if (!httpResponse.error.empty()) {
             result.error = httpResponse.error;
             result.httpCode = httpResponse.statusCode;
+            wxLogError("AI: Request failed - HTTP %ld: %s", result.httpCode, result.error);
+            // Log response body for debugging (truncated)
+            if (!httpResponse.body.empty()) {
+                std::string bodyPreview = httpResponse.body.substr(0, 500);
+                wxLogDebug("AI: Response body preview: %s%s", bodyPreview,
+                           httpResponse.body.size() > 500 ? "..." : "");
+            }
             return result;
         }
         
         // Parse response based on provider
+        GeminiResponse parsedResult;
         if (config.provider == AIProvider::Cortex) {
-            return ParseCortexResponse(httpResponse.body, httpResponse.statusCode);
+            parsedResult = ParseCortexResponse(httpResponse.body, httpResponse.statusCode);
+        } else {
+            parsedResult = ParseResponse(httpResponse.body, httpResponse.statusCode);
         }
-        return ParseResponse(httpResponse.body, httpResponse.statusCode);
+        
+        if (!parsedResult.success) {
+            wxLogError("AI: Failed to parse response - %s", parsedResult.error);
+            // Log response body for debugging (truncated)
+            std::string bodyPreview = httpResponse.body.substr(0, 500);
+            wxLogDebug("AI: Response body preview: %s%s", bodyPreview,
+                       httpResponse.body.size() > 500 ? "..." : "");
+        } else {
+            wxLogDebug("AI: Response parsed successfully - tokens: prompt=%d, completion=%d",
+                       parsedResult.promptTokens, parsedResult.completionTokens);
+            if (parsedResult.hasFunctionCall) {
+                wxLogDebug("AI: Function call requested: %s", parsedResult.functionName);
+            }
+        }
+        
+        return parsedResult;
     }
 };
 

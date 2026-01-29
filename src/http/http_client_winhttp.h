@@ -8,6 +8,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <winhttp.h>
+#include <wx/log.h>
 #include <sstream>
 #include <vector>
 
@@ -22,6 +23,7 @@ namespace Http {
 class WinHttpClient : public HttpClient {
 public:
     WinHttpClient() {
+        wxLogDebug("HTTP: Initializing WinHTTP client");
         // Create a session handle
         m_session = WinHttpOpen(
             L"ByteMuseHQ/1.0",
@@ -30,6 +32,11 @@ public:
             WINHTTP_NO_PROXY_BYPASS,
             0
         );
+        if (!m_session) {
+            wxLogError("HTTP: Failed to initialize WinHTTP session: %s", getLastErrorMessage());
+        } else {
+            wxLogDebug("HTTP: WinHTTP session initialized successfully");
+        }
     }
     
     ~WinHttpClient() override {
@@ -41,8 +48,11 @@ public:
     HttpResponse perform(const HttpRequest& request) override {
         HttpResponse response;
         
+        wxLogDebug("HTTP: WinHTTP perform() - %s %s", request.method, request.url);
+        
         if (!m_session) {
             response.error = "WinHTTP session not initialized";
+            wxLogError("HTTP: %s", response.error);
             return response;
         }
         
@@ -57,7 +67,8 @@ public:
         std::wstring wUrl = toWideString(request.url);
         
         if (!WinHttpCrackUrl(wUrl.c_str(), static_cast<DWORD>(wUrl.length()), 0, &urlComp)) {
-            response.error = "Failed to parse URL";
+            response.error = "Failed to parse URL: " + getLastErrorMessage();
+            wxLogError("HTTP: %s - URL was: %s", response.error, request.url);
             return response;
         }
         
@@ -75,10 +86,14 @@ public:
                                                                : INTERNET_DEFAULT_HTTP_PORT;
         }
         
+        wxLogDebug("HTTP: Connecting to host (port %d, scheme=%s)",
+                   port, urlComp.nScheme == INTERNET_SCHEME_HTTPS ? "HTTPS" : "HTTP");
+        
         // Create connection handle
         HINTERNET hConnect = WinHttpConnect(m_session, hostName.c_str(), port, 0);
         if (!hConnect) {
             response.error = "Failed to connect: " + getLastErrorMessage();
+            wxLogError("HTTP: %s", response.error);
             return response;
         }
         
@@ -99,9 +114,12 @@ public:
         
         if (!hRequest) {
             response.error = "Failed to open request: " + getLastErrorMessage();
+            wxLogError("HTTP: %s", response.error);
             WinHttpCloseHandle(hConnect);
             return response;
         }
+        
+        wxLogDebug("HTTP: Request opened with flags=0x%lx", requestFlags);
         
         // Set timeout
         DWORD timeout = static_cast<DWORD>(request.timeoutSeconds * 1000);
@@ -137,6 +155,7 @@ public:
         }
         
         // Send request
+        wxLogDebug("HTTP: Sending request (body size: %zu bytes)", request.body.size());
         BOOL sendResult;
         if (!request.body.empty()) {
             sendResult = WinHttpSendRequest(
@@ -158,18 +177,24 @@ public:
         
         if (!sendResult) {
             response.error = "Failed to send request: " + getLastErrorMessage();
+            wxLogError("HTTP: %s", response.error);
             WinHttpCloseHandle(hRequest);
             WinHttpCloseHandle(hConnect);
             return response;
         }
         
+        wxLogDebug("HTTP: Request sent, waiting for response...");
+        
         // Receive response
         if (!WinHttpReceiveResponse(hRequest, nullptr)) {
             response.error = "Failed to receive response: " + getLastErrorMessage();
+            wxLogError("HTTP: %s", response.error);
             WinHttpCloseHandle(hRequest);
             WinHttpCloseHandle(hConnect);
             return response;
         }
+        
+        wxLogDebug("HTTP: Response received");
         
         // Get status code
         DWORD statusCode = 0;
@@ -208,6 +233,11 @@ public:
         
         response.body = std::move(responseBody);
         response.success = (response.statusCode >= 200 && response.statusCode < 300);
+        
+        wxLogDebug("HTTP: Request complete - status=%ld, success=%s, body=%zu bytes",
+                   response.statusCode, response.success ? "true" : "false",
+                   response.body.size());
+        
         return response;
     }
     

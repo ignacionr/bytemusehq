@@ -2,6 +2,7 @@
 #define HTTP_CLIENT_CURL_H
 
 #include "http_client.h"
+#include <wx/log.h>
 #include <curl/curl.h>
 
 namespace Http {
@@ -14,7 +15,12 @@ class CurlHttpClient : public HttpClient {
 public:
     CurlHttpClient() {
         // Initialize CURL globally (safe to call multiple times)
-        curl_global_init(CURL_GLOBAL_DEFAULT);
+        CURLcode res = curl_global_init(CURL_GLOBAL_DEFAULT);
+        if (res != CURLE_OK) {
+            wxLogError("HTTP: Failed to initialize CURL: %s", curl_easy_strerror(res));
+        } else {
+            wxLogDebug("HTTP: CURL client initialized (version: %s)", curl_version());
+        }
     }
     
     ~CurlHttpClient() override {
@@ -26,9 +32,12 @@ public:
     HttpResponse perform(const HttpRequest& request) override {
         HttpResponse response;
         
+        wxLogDebug("HTTP: CURL perform() - %s %s", request.method, request.url);
+        
         CURL* curl = curl_easy_init();
         if (!curl) {
             response.error = "Failed to initialize CURL";
+            wxLogError("HTTP: %s", response.error);
             return response;
         }
         
@@ -69,6 +78,8 @@ public:
         }
         // GET is the default
         
+        wxLogDebug("HTTP: Sending request (body size: %zu bytes)", request.body.size());
+        
         // Perform the request
         CURLcode res = curl_easy_perform(curl);
         
@@ -81,11 +92,17 @@ public:
         
         if (res != CURLE_OK) {
             response.error = std::string("CURL error: ") + curl_easy_strerror(res);
+            wxLogError("HTTP: %s (code=%d)", response.error, static_cast<int>(res));
             return response;
         }
         
         response.body = std::move(responseBody);
         response.success = (response.statusCode >= 200 && response.statusCode < 300);
+        
+        wxLogDebug("HTTP: Request complete - status=%ld, success=%s, body=%zu bytes",
+                   response.statusCode, response.success ? "true" : "false",
+                   response.body.size());
+        
         return response;
     }
     
