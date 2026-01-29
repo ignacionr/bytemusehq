@@ -9,6 +9,7 @@
 #include "../ai/gemini_client.h"
 #include "../mcp/mcp.h"
 #include "../mcp/mcp_filesystem.h"
+#include "../mcp/mcp_terminal.h"
 #include <wx/dcbuffer.h>
 #include <wx/timer.h>
 #include <wx/textctrl.h>
@@ -486,8 +487,9 @@ private:
     wxTimer m_responseTimer;
     std::atomic<bool> m_isLoading{false};
     
-    // MCP filesystem provider
+    // MCP providers
     std::shared_ptr<MCP::FilesystemProvider> m_fsProvider;
+    std::shared_ptr<MCP::TerminalProvider> m_terminalProvider;
     
     // Thread-safe response queue
     std::mutex m_responseMutex;
@@ -501,14 +503,18 @@ private:
     std::queue<PendingResponse> m_pendingResponses;
     
     /**
-     * Initialize MCP filesystem provider with current working directory.
+     * Initialize MCP providers with current working directory.
      */
     void InitializeMCP() {
-        // Create filesystem provider with current working directory
-        m_fsProvider = std::make_shared<MCP::FilesystemProvider>(wxGetCwd().ToStdString());
+        std::string workDir = wxGetCwd().ToStdString();
         
-        // Register with MCP registry
+        // Create filesystem provider with current working directory
+        m_fsProvider = std::make_shared<MCP::FilesystemProvider>(workDir);
         MCP::Registry::Instance().registerProvider(m_fsProvider);
+        
+        // Create terminal provider with current working directory
+        m_terminalProvider = std::make_shared<MCP::TerminalProvider>(workDir);
+        MCP::Registry::Instance().registerProvider(m_terminalProvider);
         
         // Enable MCP in Gemini client
         AI::GeminiClient::Instance().SetMCPEnabled(true);
@@ -516,17 +522,25 @@ private:
         // Set system instruction to inform the AI about available tools
         std::string systemInstruction = 
             "You are a helpful AI assistant integrated into a code editor. "
-            "You have access to the user's workspace files through several tools:\n\n"
+            "You have access to the user's workspace files and terminal through several tools:\n\n"
+            "FILESYSTEM TOOLS:\n"
             "- fs_list_directory: List files and folders in a directory\n"
             "- fs_read_file: Read the complete contents of a file\n"
             "- fs_read_file_lines: Read specific line ranges from a file\n"
             "- fs_get_file_info: Get metadata about a file (size, type, line count)\n"
             "- fs_search_files: Search for files by name pattern (e.g., '*.cpp')\n"
             "- fs_grep: Search for text content within files\n\n"
+            "TERMINAL TOOLS:\n"
+            "- terminal_execute: Execute shell commands (build, run scripts, git, etc.)\n"
+            "- terminal_get_shell_info: Get info about the current shell environment\n"
+            "- terminal_get_env: Get environment variable values\n"
+            "- terminal_which: Find the path of an executable\n"
+            "- terminal_list_processes: List running processes\n\n"
             "When the user asks about their code, project structure, or file contents, "
             "USE THESE TOOLS to read and explore their files. Don't say you can't access files - you can! "
-            "Start by listing the directory or reading relevant files to answer their questions accurately.\n\n"
-            "The workspace root is: " + m_fsProvider->getRootPath();
+            "When the user asks you to run commands, build code, or execute scripts, use the terminal tools.\n\n"
+            "The workspace root is: " + m_fsProvider->getRootPath() + "\n"
+            "Platform: " + m_terminalProvider->getWorkingDirectory();
         
         AI::GeminiClient::Instance().SetSystemInstruction(systemInstruction);
         
