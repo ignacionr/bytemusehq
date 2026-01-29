@@ -142,11 +142,20 @@ void MainFrame::SetupUI()
     mainSizer->Add(m_hSplitter, 1, wxEXPAND);
     m_mainPanel->SetSizer(mainSizer);
     
-    // Populate tree with current directory
-    wxString currentDir = wxGetCwd();
-    wxTreeItemId rootId = m_treeCtrl->AddRoot(currentDir);
-    PopulateTree(currentDir, rootId);
-    m_treeCtrl->Expand(rootId);
+    // Populate tree with current directory (or remote path if SSH enabled)
+    m_sshConfig = FrameSshConfig::LoadFromConfig();
+    if (m_sshConfig.isValid()) {
+        // SSH enabled - use remote path
+        wxString remotePath = Config::Instance().GetString("ssh.remotePath", "~");
+        OpenFolder(remotePath, true);
+    } else {
+        // Local directory
+        wxString currentDir = wxGetCwd();
+        wxTreeItemId rootId = m_treeCtrl->AddRoot(currentDir);
+        m_treeCtrl->SetItemData(rootId, new PathData(currentDir, false));
+        PopulateTree(currentDir, rootId);
+        m_treeCtrl->Expand(rootId);
+    }
 }
 
 void MainFrame::ApplyCurrentTheme()
@@ -302,9 +311,24 @@ void MainFrame::OnTreeItemActivated(wxTreeEvent& event)
     
     wxString path = data->GetPath();
     
-    // Only open files, not directories
-    if (!wxDir::Exists(path) && wxFileExists(path)) {
-        m_editor->OpenFile(path);
+    if (data->IsRemote()) {
+        // Remote file - check if it's a directory via SSH
+        if (m_sshConfig.isValid()) {
+            std::string sshPrefix = m_sshConfig.buildSshPrefix();
+            std::string testCmd = sshPrefix + " \"test -d '\" + path.ToStdString() + \"'\" 2>&1";
+            int result = system(testCmd.c_str());
+            
+            if (result != 0) {
+                // It's a file, open it remotely
+                m_editor->OpenRemoteFile(path, m_sshConfig.buildSshPrefix());
+            }
+            // If it's a directory, do nothing (expand handles it)
+        }
+    } else {
+        // Local file - only open files, not directories
+        if (!wxDir::Exists(path) && wxFileExists(path)) {
+            m_editor->OpenFile(path);
+        }
     }
 }
 
@@ -322,15 +346,19 @@ void MainFrame::OnTreeItemExpanding(wxTreeEvent& event)
     wxTreeItemId firstChild = m_treeCtrl->GetFirstChild(itemId, cookie);
     
     if (firstChild.IsOk()) {
-        PathData* data = dynamic_cast<PathData*>(m_treeCtrl->GetItemData(firstChild));
-        if (!data) {
+        PathData* childData = dynamic_cast<PathData*>(m_treeCtrl->GetItemData(firstChild));
+        if (!childData) {
             // This is the dummy child, remove it
             m_treeCtrl->Delete(firstChild);
             
             // Now populate the actual children
             PathData* parentData = dynamic_cast<PathData*>(m_treeCtrl->GetItemData(itemId));
             if (parentData) {
-                PopulateTree(parentData->GetPath(), itemId);
+                if (parentData->IsRemote()) {
+                    PopulateTreeRemote(parentData->GetPath(), itemId);
+                } else {
+                    PopulateTree(parentData->GetPath(), itemId);
+                }
             }
         }
     }
@@ -666,26 +694,112 @@ void MainFrame::OnToggleTerminal(wxCommandEvent& event)
     ToggleTerminal();
 }
 
-void MainFrame::OpenFolder(const wxString& path)
+void MainFrame::OpenFolder(const wxString& path, bool isRemote)
 {
-    if (!wxDir::Exists(path)) return;
+    m_isRemoteTree = isRemote;
     
-    // Change the current working directory
-    wxSetWorkingDirectory(path);
-    
-    // Update terminal working directory
-    if (m_terminal) {
-        m_terminal->SetWorkingDirectory(path);
+    if (isRemote) {
+        // Load SSH config for remote browsing
+        m_sshConfig = FrameSshConfig::LoadFromConfig();
+        if (!m_sshConfig.isValid()) {
+            wxMessageBox("SSH is not properly configured. Please check ssh.host in config.",
+                        "SSH Error", wxOK | wxICON_ERROR, this);
+            return;
+        }
+        
+        // Update terminal to use SSH if available
+        if (m_terminal) {
+            // Don't change local working directory for remote folders
+            // Terminal will need its own SSH handling
+        }
+    } else {
+        // Local folder
+        if (!wxDir::Exists(path)) return;
+        
+        // Change the current working directory
+        wxSetWorkingDirectory(path);
+        
+        // Update terminal working directory
+        if (m_terminal) {
+            m_terminal->SetWorkingDirectory(path);
+        }
     }
     
     // Clear the existing tree
     m_treeCtrl->DeleteAllItems();
     
     // Populate tree with the new directory
-    wxTreeItemId rootId = m_treeCtrl->AddRoot(path);
-    PopulateTree(path, rootId);
+    wxString displayPath = path;
+    if (isRemote) {
+        displayPath = "[SSH] " + path;
+    }
+    wxTreeItemId rootId = m_treeCtrl->AddRoot(displayPath);
+    m_treeCtrl->SetItemData(rootId, new PathData(path, isRemote));
+    
+    if (isRemote) {
+        PopulateTreeRemote(path, rootId);
+    } else {
+        PopulateTree(path, rootId);
+    }
     m_treeCtrl->Expand(rootId);
     
     // Update the window title to reflect the change
     UpdateTitle();
+}
+
+void MainFrame::PopulateTreeRemote(const wxString& path, wxTreeItemId parentItem)
+{
+    if (!m_sshConfig.isValid()) return;
+    
+    std::string sshPrefix = m_sshConfig.buildSshPrefix();
+    std::string cmd = sshPrefix + " \"ls -la '" + path.ToStdString() + "' 2>/dev/null\" 2>&1";
+    
+    FILE* pipe = popen(cmd.c_str(), "r");
+    if (!pipe) return;
+    
+    std::string output;
+    char buffer[4096];
+    while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+        output += buffer;
+    }
+    pclose(pipe);
+    
+    std::istringstream stream(output);
+    std::string line;
+    
+    while (std::getline(stream, line)) {
+        // Skip total line and empty lines
+        if (line.empty() || line.find("total") == 0) continue;
+        
+        // Parse ls -la output
+        std::istringstream lineStream(line);
+        std::string permissions, links, owner, group, size, month, day, timeStr, name;
+        lineStream >> permissions >> links >> owner >> group >> size >> month >> day >> timeStr;
+        std::getline(lineStream, name);
+        
+        // Trim leading whitespace from name
+        size_t start = name.find_first_not_of(" \t");
+        if (start != std::string::npos) {
+            name = name.substr(start);
+        }
+        
+        // Skip . and .. and hidden files
+        if (name.empty() || name == "." || name == ".." || name[0] == '.') continue;
+        
+        wxString fullPath = path;
+        if (!fullPath.EndsWith("/")) fullPath += "/";
+        fullPath += wxString(name);
+        
+        bool isDirectory = !permissions.empty() && permissions[0] == 'd';
+        
+        if (isDirectory) {
+            wxTreeItemId itemId = m_treeCtrl->AppendItem(
+                parentItem, wxString(name), -1, -1, new PathData(fullPath, true));
+            m_treeCtrl->AppendItem(itemId, ""); // Dummy for expand arrow
+        } else {
+            m_treeCtrl->AppendItem(
+                parentItem, wxString(name), -1, -1, new PathData(fullPath, true));
+        }
+    }
+    m_treeCtrl->SortChildren(parentItem);
 }

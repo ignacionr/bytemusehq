@@ -4,6 +4,7 @@
 #include "command.h"
 #include "command_registry.h"
 #include "../ui/terminal.h"
+#include "../ui/remote_folder_dialog.h"
 #include "../theme/theme.h"
 #include "../config/config.h"
 #include <wx/stc/stc.h>
@@ -93,11 +94,38 @@ inline void RegisterAll() {
             auto* frame = static_cast<MainFrame*>(ctx.Get<wxWindow>("mainFrame"));
             if (!window || !frame) return;
 
-            wxDirDialog dlg(window, "Open Folder", wxGetCwd(),
-                           wxDD_DEFAULT_STYLE | wxDD_DIR_MUST_EXIST);
+            // Check if SSH is enabled
+            auto& config = Config::Instance();
+            bool sshEnabled = config.GetBool("ssh.enabled", false);
+            std::string sshHost = config.GetString("ssh.host", "").ToStdString();
+            
+            if (sshEnabled && !sshHost.empty()) {
+                // Use remote folder dialog for SSH
+                UI::RemoteFolderSshConfig sshConfig;
+                sshConfig.host = sshHost;
+                sshConfig.port = config.GetInt("ssh.port", 22);
+                sshConfig.user = config.GetString("ssh.user", "").ToStdString();
+                sshConfig.identityFile = config.GetString("ssh.identityFile", "").ToStdString();
+                sshConfig.extraOptions = config.GetString("ssh.extraOptions", "").ToStdString();
+                sshConfig.connectionTimeout = config.GetInt("ssh.connectionTimeout", 30);
+                
+                wxString initialPath = config.GetString("ssh.remotePath", "~");
+                UI::RemoteFolderDialog dlg(window, sshConfig, initialPath);
+                
+                if (dlg.ShowModal() == wxID_OK) {
+                    wxString remotePath = dlg.GetPath();
+                    // Update ssh.remotePath config and refresh
+                    config.Set("ssh.remotePath", remotePath);
+                    frame->OpenFolder(remotePath, true /* isRemote */);
+                }
+            } else {
+                // Use local folder dialog
+                wxDirDialog dlg(window, "Open Folder", wxGetCwd(),
+                               wxDD_DEFAULT_STYLE | wxDD_DIR_MUST_EXIST);
 
-            if (dlg.ShowModal() == wxID_OK) {
-                frame->OpenFolder(dlg.GetPath());
+                if (dlg.ShowModal() == wxID_OK) {
+                    frame->OpenFolder(dlg.GetPath());
+                }
             }
         }
     ));
