@@ -8,9 +8,12 @@
 #include "../commands/command_palette.h"
 #include "../commands/builtin_commands.h"
 #include "../theme/theme.h"
+#include "../mcp/mcp.h"
+#include "../mcp/mcp_code_index.h"
 #include "builtin_widgets.h"
 #include "widget_bar.h"
 #include "widget_activity_bar.h"
+#include "symbols_widget.h"
 
 enum {
     ID_COMMAND_PALETTE = wxID_HIGHEST + 1,
@@ -360,18 +363,88 @@ void MainFrame::SetupSidebarWidgets()
     auto& registry = WidgetRegistry::Instance();
     auto sidebarWidgets = registry.GetWidgetsByLocation(WidgetLocation::Sidebar);
     
+    BuiltinWidgets::SymbolsWidget* symbolsWidget = nullptr;
+    
     for (auto& widget : sidebarWidgets) {
         auto info = widget->GetInfo();
         // Skip FileTree widget as it has dedicated handling
         if (info.id == "core.fileTree") continue;
         
+        // Track the symbols widget for MCP connection
+        if (info.id == "core.symbols") {
+            symbolsWidget = dynamic_cast<BuiltinWidgets::SymbolsWidget*>(widget.get());
+        }
+        
         // Add widget to the widget bar
         m_widgetBar->AddWidget(widget);
+    }
+    
+    // Connect the symbols widget to the MCP code index provider
+    if (symbolsWidget) {
+        ConnectCodeIndexToMCP(symbolsWidget);
     }
     
     // Build the initial layout and update visibility
     m_widgetBar->RebuildLayout();
     UpdateWidgetBarVisibility();
+}
+
+/**
+ * Connect the SymbolsWidget's code index to the MCP CodeIndexProvider.
+ * This allows the AI chat to query the code index.
+ */
+void MainFrame::ConnectCodeIndexToMCP(BuiltinWidgets::SymbolsWidget* symbolsWidget)
+{
+    auto codeIndexProvider = std::dynamic_pointer_cast<MCP::CodeIndexProvider>(
+        MCP::Registry::Instance().getProvider("mcp.codeindex"));
+    
+    if (!codeIndexProvider) {
+        // Provider may not be registered yet if GeminiChatWidget hasn't been created
+        // Create and register it now
+        codeIndexProvider = std::make_shared<MCP::CodeIndexProvider>();
+        MCP::Registry::Instance().registerProvider(codeIndexProvider);
+    }
+    
+    // Set up callbacks to the symbols widget
+    codeIndexProvider->setSearchCallback([symbolsWidget](const std::string& query) {
+        auto results = symbolsWidget->SearchSymbols(wxString(query));
+        std::vector<std::pair<std::string, LspDocumentSymbol>> stdResults;
+        for (const auto& [path, sym] : results) {
+            stdResults.push_back({path.ToStdString(), sym});
+        }
+        return stdResults;
+    });
+    
+    codeIndexProvider->setFileSymbolsCallback([symbolsWidget](const std::string& path) {
+        return symbolsWidget->GetFileSymbols(wxString(path));
+    });
+    
+    codeIndexProvider->setAllSymbolsCallback([symbolsWidget]() {
+        const auto& wxSymbols = symbolsWidget->GetAllSymbols();
+        std::vector<std::pair<std::string, LspDocumentSymbol>> stdResults;
+        stdResults.reserve(wxSymbols.size());
+        for (const auto& [path, sym] : wxSymbols) {
+            stdResults.push_back({path.ToStdString(), sym});
+        }
+        return stdResults;
+    });
+    
+    codeIndexProvider->setSymbolsByKindCallback([symbolsWidget](LspSymbolKind kind) {
+        auto results = symbolsWidget->GetSymbolsByKind(kind);
+        std::vector<std::pair<std::string, LspDocumentSymbol>> stdResults;
+        for (const auto& [path, sym] : results) {
+            stdResults.push_back({path.ToStdString(), sym});
+        }
+        return stdResults;
+    });
+    
+    codeIndexProvider->setIndexStatusCallback([symbolsWidget]() {
+        return std::make_tuple(
+            symbolsWidget->IsIndexingComplete(),
+            symbolsWidget->GetIndexedFileCount(),
+            symbolsWidget->GetIndexedSymbolCount()
+        );
+    });
 }
 
 void MainFrame::SetupActivityBar()

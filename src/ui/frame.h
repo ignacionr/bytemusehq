@@ -12,8 +12,12 @@
 #include "../commands/command.h"
 #include "../theme/theme.h"
 
-// Forward declaration
+// Forward declarations
 class WidgetActivityBar;
+
+namespace BuiltinWidgets {
+    class SymbolsWidget;
+}
 
 // Custom tree item data to store file paths
 class PathData : public wxTreeItemData {
@@ -73,6 +77,7 @@ private:
     void SetupUI();
     void SetupActivityBar();           // Initialize the activity bar with categories
     void SetupSidebarWidgets();
+    void ConnectCodeIndexToMCP(BuiltinWidgets::SymbolsWidget* symbolsWidget);  // Connect to MCP
     void UpdateWidgetBarVisibility();  // Show/hide widget bar based on visible widgets
     void OnCategorySelected(const wxString& categoryId);  // Handle category selection
     void SetupMenuBar();

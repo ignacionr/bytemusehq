@@ -10,6 +10,7 @@
 #include "../mcp/mcp.h"
 #include "../mcp/mcp_filesystem.h"
 #include "../mcp/mcp_terminal.h"
+#include "../mcp/mcp_code_index.h"
 #include <wx/dcbuffer.h>
 #include <wx/timer.h>
 #include <wx/textctrl.h>
@@ -512,6 +513,7 @@ private:
     // MCP providers
     std::shared_ptr<MCP::FilesystemProvider> m_fsProvider;
     std::shared_ptr<MCP::TerminalProvider> m_terminalProvider;
+    std::shared_ptr<MCP::CodeIndexProvider> m_codeIndexProvider;
     
     // Thread-safe response queue
     std::mutex m_responseMutex;
@@ -538,13 +540,17 @@ private:
         m_terminalProvider = std::make_shared<MCP::TerminalProvider>(workDir);
         MCP::Registry::Instance().registerProvider(m_terminalProvider);
         
+        // Create code index provider (will be connected to SymbolsWidget later)
+        m_codeIndexProvider = std::make_shared<MCP::CodeIndexProvider>();
+        MCP::Registry::Instance().registerProvider(m_codeIndexProvider);
+        
         // Enable MCP in Gemini client
         AI::GeminiClient::Instance().SetMCPEnabled(true);
         
         // Set system instruction to inform the AI about available tools
         std::string systemInstruction = 
             "You are a helpful AI assistant integrated into a code editor. "
-            "You have access to the user's workspace files and terminal through several tools:\n\n"
+            "You have access to the user's workspace files, terminal, and code index through several tools:\n\n"
             "FILESYSTEM TOOLS:\n"
             "- fs_list_directory: List files and folders in a directory\n"
             "- fs_read_file: Read the complete contents of a file\n"
@@ -558,8 +564,16 @@ private:
             "- terminal_get_env: Get environment variable values\n"
             "- terminal_which: Find the path of an executable\n"
             "- terminal_list_processes: List running processes\n\n"
+            "CODE INDEX TOOLS (powered by clangd):\n"
+            "- code_search_symbols: Search for functions, classes, variables by name\n"
+            "- code_list_file_symbols: List all symbols defined in a specific file\n"
+            "- code_list_functions: List all functions/methods in the workspace\n"
+            "- code_list_classes: List all classes and structs in the workspace\n"
+            "- code_get_index_status: Check if code indexing is complete\n\n"
             "When the user asks about their code, project structure, or file contents, "
             "USE THESE TOOLS to read and explore their files. Don't say you can't access files - you can! "
+            "When the user asks about code structure, functions, or classes, use the code index tools first "
+            "for faster and more accurate results. "
             "When the user asks you to run commands, build code, or execute scripts, use the terminal tools.\n\n"
             "The workspace root is: " + m_fsProvider->getRootPath() + "\n"
             "Platform: " + m_terminalProvider->getWorkingDirectory();
