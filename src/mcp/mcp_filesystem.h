@@ -178,24 +178,65 @@ private:
      * Returns empty string if path escapes the sandbox.
      */
     std::string resolvePath(const std::string& relativePath) const {
-        wxString rootStr = wxString(m_rootPath);
-        wxString relStr = wxString(relativePath);
-        wxFileName fn(rootStr, relStr);
+        // Handle the relative path properly - it may contain subdirectories
+        wxFileName fn;
+        if (relativePath.empty() || relativePath == ".") {
+            fn.AssignDir(m_rootPath);
+        } else {
+            // Combine root path with relative path
+            wxString fullPathStr = wxString(m_rootPath);
+            if (!fullPathStr.EndsWith(wxFileName::GetPathSeparator())) {
+                fullPathStr += wxFileName::GetPathSeparator();
+            }
+            fullPathStr += wxString(relativePath);
+            fn.Assign(fullPathStr);
+        }
         fn.Normalize(wxPATH_NORM_DOTS | wxPATH_NORM_ABSOLUTE);
         
         std::string fullPath = fn.GetFullPath().ToStdString();
         
         // Security check: ensure path is within root
-        wxString rootPathStr = wxString(m_rootPath);
-        wxFileName rootFn(rootPathStr);
+        wxFileName rootFn;
+        rootFn.AssignDir(m_rootPath);
         rootFn.Normalize(wxPATH_NORM_DOTS | wxPATH_NORM_ABSOLUTE);
         std::string normalizedRoot = rootFn.GetFullPath().ToStdString();
         
-        if (fullPath.find(normalizedRoot) != 0) {
+        // Ensure the root path ends with separator for proper prefix matching
+        if (!normalizedRoot.empty() && normalizedRoot.back() != wxFileName::GetPathSeparator()) {
+            normalizedRoot += wxFileName::GetPathSeparator();
+        }
+        
+        // Check if fullPath starts with normalizedRoot, or equals the root (without trailing separator)
+        std::string rootWithoutSep = normalizedRoot;
+        if (!rootWithoutSep.empty() && rootWithoutSep.back() == wxFileName::GetPathSeparator()) {
+            rootWithoutSep.pop_back();
+        }
+        
+        if (fullPath != rootWithoutSep && fullPath.find(normalizedRoot) != 0) {
             return ""; // Path escapes sandbox
         }
         
         return fullPath;
+    }
+    
+    /**
+     * Check if a dotfile/directory should be skipped.
+     * Allows .vscode but skips .git, .DS_Store, etc.
+     */
+    bool shouldSkipDotfile(const wxString& filename) const {
+        if (!filename.StartsWith(".")) {
+            return false;  // Not a dotfile, don't skip
+        }
+        // Allow these dotfiles/directories
+        if (filename == ".vscode" || filename == ".github" || 
+            filename == ".gitignore" || filename == ".editorconfig" ||
+            filename == ".clang-format" || filename == ".clang-tidy" ||
+            filename == ".env" || filename == ".env.local" ||
+            filename == ".prettierrc" || filename == ".eslintrc" ||
+            filename == ".eslintrc.json" || filename == ".eslintrc.js") {
+            return false;  // Allow these
+        }
+        return true;  // Skip other dotfiles like .git, .DS_Store
     }
     
     /**
@@ -250,8 +291,8 @@ private:
         bool cont = dir.GetFirst(&filename);
         
         while (cont) {
-            // Skip hidden files
-            if (!filename.StartsWith(".")) {
+            // Skip certain hidden files but allow .vscode, .github, etc.
+            if (!shouldSkipDotfile(filename)) {
                 std::string fullPath = wxFileName(path, filename).GetFullPath().ToStdString();
                 
                 Value entry;
@@ -432,7 +473,7 @@ private:
                 wxString filename;
                 bool cont = dir.GetFirst(&filename);
                 while (cont) {
-                    if (!filename.StartsWith(".")) {
+                    if (!shouldSkipDotfile(filename)) {
                         if (wxDir::Exists(wxFileName(fullPath, filename).GetFullPath())) {
                             dirCount++;
                         } else {
@@ -512,7 +553,7 @@ private:
         // Search files
         bool cont = dir.GetFirst(&filename, wxString(pattern), wxDIR_FILES);
         while (cont && results.size() < static_cast<size_t>(maxResults)) {
-            if (!filename.StartsWith(".")) {
+            if (!shouldSkipDotfile(filename)) {
                 std::string fullPath = wxFileName(path, filename).GetFullPath().ToStdString();
                 Value entry;
                 entry["name"] = filename.ToStdString();
@@ -529,7 +570,7 @@ private:
         if (recursive) {
             cont = dir.GetFirst(&filename, wxEmptyString, wxDIR_DIRS);
             while (cont && results.size() < static_cast<size_t>(maxResults)) {
-                if (!filename.StartsWith(".")) {
+                if (!shouldSkipDotfile(filename) && filename != "node_modules") {
                     std::string subPath = wxFileName(path, filename).GetFullPath().ToStdString();
                     searchFilesRecursive(subPath, pattern, true, results, maxResults);
                 }
@@ -586,7 +627,7 @@ private:
         // Search in files
         bool cont = dir.GetFirst(&filename, wxString(filePattern), wxDIR_FILES);
         while (cont && matches.size() < static_cast<size_t>(maxResults)) {
-            if (!filename.StartsWith(".")) {
+            if (!shouldSkipDotfile(filename)) {
                 std::string filePath = wxFileName(path, filename).GetFullPath().ToStdString();
                 
                 // Only search text files
@@ -601,7 +642,7 @@ private:
         // Recurse into directories
         cont = dir.GetFirst(&filename, wxEmptyString, wxDIR_DIRS);
         while (cont && matches.size() < static_cast<size_t>(maxResults)) {
-            if (!filename.StartsWith(".") && filename != "node_modules" && filename != ".git") {
+            if (!shouldSkipDotfile(filename) && filename != "node_modules") {
                 std::string subPath = wxFileName(path, filename).GetFullPath().ToStdString();
                 grepFilesRecursive(subPath, query, filePattern, caseSensitive, matches, maxResults);
             }
