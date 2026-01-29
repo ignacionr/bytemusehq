@@ -1111,27 +1111,85 @@ private:
     std::queue<PendingResponse> m_pendingResponses;
     
     /**
+     * Load SSH configuration from global settings.
+     */
+    static MCP::TerminalSshConfig LoadTerminalSshConfig() {
+        auto& config = Config::Instance();
+        MCP::TerminalSshConfig ssh;
+        ssh.enabled = config.GetBool("ssh.enabled", false);
+        ssh.host = config.GetString("ssh.host", "").ToStdString();
+        ssh.port = config.GetInt("ssh.port", 22);
+        ssh.user = config.GetString("ssh.user", "").ToStdString();
+        ssh.identityFile = config.GetString("ssh.identityFile", "").ToStdString();
+        ssh.extraOptions = config.GetString("ssh.extraOptions", "").ToStdString();
+        ssh.forwardAgent = config.GetBool("ssh.forwardAgent", false);
+        ssh.connectionTimeout = config.GetInt("ssh.connectionTimeout", 30);
+        return ssh;
+    }
+    
+    static MCP::FilesystemSshConfig LoadFilesystemSshConfig() {
+        auto& config = Config::Instance();
+        MCP::FilesystemSshConfig ssh;
+        ssh.enabled = config.GetBool("ssh.enabled", false);
+        ssh.host = config.GetString("ssh.host", "").ToStdString();
+        ssh.port = config.GetInt("ssh.port", 22);
+        ssh.user = config.GetString("ssh.user", "").ToStdString();
+        ssh.identityFile = config.GetString("ssh.identityFile", "").ToStdString();
+        ssh.extraOptions = config.GetString("ssh.extraOptions", "").ToStdString();
+        ssh.connectionTimeout = config.GetInt("ssh.connectionTimeout", 30);
+        return ssh;
+    }
+    
+    /**
      * Initialize MCP providers with current working directory.
+     * Applies SSH configuration if enabled.
      */
     void InitializeMCP() {
-        std::string workDir = wxGetCwd().ToStdString();
+        auto& config = Config::Instance();
+        bool sshEnabled = config.GetBool("ssh.enabled", false);
         
-        // Create filesystem provider with current working directory
+        // Determine working directory - local or remote
+        std::string workDir;
+        if (sshEnabled) {
+            // Use remote path when SSH is enabled
+            workDir = config.GetString("ssh.remotePath", "~").ToStdString();
+        } else {
+            workDir = wxGetCwd().ToStdString();
+        }
+        
+        // Create filesystem provider
         m_fsProvider = std::make_shared<MCP::FilesystemProvider>(workDir);
+        if (sshEnabled) {
+            m_fsProvider->setSshConfig(LoadFilesystemSshConfig());
+        }
         MCP::Registry::Instance().registerProvider(m_fsProvider);
         
-        // Create terminal provider with current working directory
+        // Create terminal provider
         m_terminalProvider = std::make_shared<MCP::TerminalProvider>(workDir);
+        if (sshEnabled) {
+            m_terminalProvider->setSshConfig(LoadTerminalSshConfig());
+        }
         MCP::Registry::Instance().registerProvider(m_terminalProvider);
         
         // Create code index provider (will be connected to SymbolsWidget later)
         m_codeIndexProvider = std::make_shared<MCP::CodeIndexProvider>();
+        if (sshEnabled) {
+            MCP::CodeIndexSshConfig codeIndexSsh;
+            codeIndexSsh.enabled = true;
+            codeIndexSsh.host = config.GetString("ssh.host", "").ToStdString();
+            codeIndexSsh.remotePath = workDir;
+            m_codeIndexProvider->setSshConfig(codeIndexSsh);
+        }
         MCP::Registry::Instance().registerProvider(m_codeIndexProvider);
         
         // Enable MCP in Gemini client
         AI::GeminiClient::Instance().SetMCPEnabled(true);
         
         // Set system instruction to inform the AI about available tools
+        std::string locationInfo = sshEnabled 
+            ? "Remote workspace via SSH: " + config.GetString("ssh.host", "").ToStdString() + ":" + workDir
+            : "Local workspace: " + workDir;
+            
         std::string systemInstruction = 
             "You are a helpful AI assistant integrated into a code editor. "
             "You have access to the user's workspace files, terminal, and code index through several tools:\n\n"
@@ -1159,8 +1217,7 @@ private:
             "When the user asks about code structure, functions, or classes, use the code index tools first "
             "for faster and more accurate results. "
             "When the user asks you to run commands, build code, or execute scripts, use the terminal tools.\n\n"
-            "The workspace root is: " + m_fsProvider->getRootPath() + "\n"
-            "Platform: " + m_terminalProvider->getWorkingDirectory();
+            + locationInfo;
         
         AI::GeminiClient::Instance().SetSystemInstruction(systemInstruction);
         

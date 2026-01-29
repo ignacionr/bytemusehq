@@ -303,10 +303,38 @@ private:
     };
     
     /**
+     * Load SSH configuration for LSP client from global settings.
+     */
+    static LspSshConfig LoadLspSshConfig() {
+        auto& config = Config::Instance();
+        LspSshConfig ssh;
+        ssh.enabled = config.GetBool("ssh.enabled", false);
+        ssh.host = config.GetString("ssh.host", "").ToStdString();
+        ssh.port = config.GetInt("ssh.port", 22);
+        ssh.user = config.GetString("ssh.user", "").ToStdString();
+        ssh.identityFile = config.GetString("ssh.identityFile", "").ToStdString();
+        ssh.extraOptions = config.GetString("ssh.extraOptions", "").ToStdString();
+        ssh.connectionTimeout = config.GetInt("ssh.connectionTimeout", 30);
+        return ssh;
+    }
+    
+    /**
      * Initialize the LSP client.
+     * Applies SSH configuration if enabled for remote code indexing.
      */
     void InitializeLspClient() {
         m_lspClient = std::make_unique<LspClient>();
+        
+        // Apply SSH configuration if enabled
+        auto& config = Config::Instance();
+        bool sshEnabled = config.GetBool("ssh.enabled", false);
+        wxString workspaceRoot = m_workspaceRoot;
+        
+        if (sshEnabled) {
+            m_lspClient->SetSshConfig(LoadLspSshConfig());
+            // Use remote path as workspace root
+            workspaceRoot = config.GetString("ssh.remotePath", "~");
+        }
         
         // Try to find clangd in order of preference:
         // 1. User-configured path
@@ -319,10 +347,13 @@ private:
             return;
         }
         
-        ShowStatus("Starting clangd...");
+        wxString statusMsg = sshEnabled 
+            ? "Starting remote clangd..." 
+            : "Starting clangd...";
+        ShowStatus(statusMsg);
         
-        if (!m_lspClient->Start(clangdCommand, m_workspaceRoot)) {
-            ShowStatus("Failed to start clangd");
+        if (!m_lspClient->Start(clangdCommand, workspaceRoot)) {
+            ShowStatus(sshEnabled ? "Failed to start remote clangd" : "Failed to start clangd");
             return;
         }
         

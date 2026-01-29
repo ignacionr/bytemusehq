@@ -2,6 +2,12 @@
 #include <wx/filename.h>
 #include <wx/filedlg.h>
 #include <wx/msgdlg.h>
+#include <cstdio>
+#include <string>
+
+#ifdef _WIN32
+#include <io.h>
+#endif
 
 wxBEGIN_EVENT_TABLE(Editor, wxPanel)
     EVT_STC_SAVEPOINTREACHED(wxID_ANY, Editor::OnSavePointReached)
@@ -318,6 +324,8 @@ bool Editor::OpenFile(const wxString& path)
     m_textCtrl->SetSavePoint();
     
     m_currentFilePath = path;
+    m_isRemoteFile = false;
+    m_sshPrefix.clear();
     SetModified(false);
     
     // Configure lexer based on file extension
@@ -329,10 +337,101 @@ bool Editor::OpenFile(const wxString& path)
     return true;
 }
 
+bool Editor::OpenRemoteFile(const wxString& remotePath, const std::string& sshPrefix)
+{
+    // Check for unsaved changes
+    if (!PromptSaveIfModified()) {
+        return false;
+    }
+    
+    // Fetch file content via SSH
+    std::string cmd = sshPrefix + " \"cat '" + remotePath.ToStdString() + "'\" 2>&1";
+    
+#ifdef _WIN32
+    FILE* pipe = _popen(cmd.c_str(), "r");
+#else
+    FILE* pipe = popen(cmd.c_str(), "r");
+#endif
+    
+    if (!pipe) {
+        wxMessageBox("Could not connect to remote host", "Error", wxOK | wxICON_ERROR, this);
+        return false;
+    }
+    
+    std::string content;
+    char buffer[4096];
+    while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+        content += buffer;
+    }
+    
+#ifdef _WIN32
+    int status = _pclose(pipe);
+#else
+    int status = pclose(pipe);
+#endif
+    
+    if (status != 0) {
+        wxMessageBox("Could not read remote file: " + remotePath, "Error", wxOK | wxICON_ERROR, this);
+        return false;
+    }
+    
+    m_textCtrl->SetText(wxString(content));
+    m_textCtrl->EmptyUndoBuffer();
+    m_textCtrl->SetSavePoint();
+    
+    m_currentFilePath = remotePath;
+    m_isRemoteFile = true;
+    m_sshPrefix = sshPrefix;
+    SetModified(false);
+    
+    // Configure lexer based on file extension
+    wxFileName fileName(remotePath);
+    ConfigureLexer(fileName.GetExt());
+    
+    NotifyFileChanged();
+    
+    return true;
+}
+
 bool Editor::Save()
 {
     if (m_currentFilePath.IsEmpty()) {
         return SaveAs();
+    }
+    
+    // Handle remote file save
+    if (m_isRemoteFile && !m_sshPrefix.empty()) {
+        wxString content = m_textCtrl->GetText();
+        
+        // Write content to remote file via SSH
+        // Use a temp file approach for reliability
+        wxString tempPath = wxFileName::CreateTempFileName("bytemuse_");
+        wxFile tempFile(tempPath, wxFile::write);
+        if (!tempFile.IsOpened() || !tempFile.Write(content)) {
+            wxMessageBox("Could not create temp file for remote save", "Error", wxOK | wxICON_ERROR, this);
+            return false;
+        }
+        tempFile.Close();
+        
+        // Use scp to copy file
+        std::string scpCmd = "scp";
+        // Extract host from ssh prefix (after last space)
+        size_t lastSpace = m_sshPrefix.rfind(' ');
+        std::string hostPart = lastSpace != std::string::npos ? m_sshPrefix.substr(lastSpace + 1) : "";
+        
+        scpCmd += " \"" + tempPath.ToStdString() + "\" " + hostPart + ":\"" + m_currentFilePath.ToStdString() + "\"";
+        
+        int result = system(scpCmd.c_str());
+        wxRemoveFile(tempPath);
+        
+        if (result != 0) {
+            wxMessageBox("Could not save remote file: " + m_currentFilePath, "Error", wxOK | wxICON_ERROR, this);
+            return false;
+        }
+        
+        m_textCtrl->SetSavePoint();
+        SetModified(false);
+        return true;
     }
     
     wxFile file(m_currentFilePath, wxFile::write);

@@ -5,6 +5,7 @@
 #include <wx/stc/stc.h>
 #include <wx/file.h>
 #include <functional>
+#include <string>
 #include "../theme/theme.h"
 
 /**
@@ -23,6 +24,7 @@ public:
 
     // File operations
     bool OpenFile(const wxString& path);
+    bool OpenRemoteFile(const wxString& remotePath, const std::string& sshPrefix);
     bool Save();
     bool SaveAs(const wxString& path);
     bool SaveAs(); // Shows dialog
@@ -54,6 +56,8 @@ private:
     wxString m_currentFilePath;
     bool m_isModified;
     int m_themeListenerId;
+    bool m_isRemoteFile = false;
+    std::string m_sshPrefix;
     
     // Callbacks
     DirtyStateCallback m_dirtyCallback;
