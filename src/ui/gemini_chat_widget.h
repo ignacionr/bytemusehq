@@ -805,7 +805,11 @@ public:
         
         // Header
         wxBoxSizer* headerSizer = new wxBoxSizer(wxHORIZONTAL);
+#ifdef __WXMSW__
+        m_headerLabel = new wxStaticText(m_panel, wxID_ANY, wxT("[AI] AI Chat"));
+#else
         m_headerLabel = new wxStaticText(m_panel, wxID_ANY, wxT("\U0001F916 AI Chat")); // 🤖
+#endif
         wxFont headerFont = m_headerLabel->GetFont();
         headerFont.SetWeight(wxFONTWEIGHT_BOLD);
         headerFont.SetPointSize(11);
@@ -827,12 +831,20 @@ public:
         headerSizer->Add(m_modelChoice, 0, wxLEFT | wxALIGN_CENTER_VERTICAL, 5);
         
         // Refresh models button
+#ifdef __WXMSW__
+        m_refreshModelsBtn = new wxButton(m_panel, wxID_ANY, wxT("R"), wxDefaultPosition, wxSize(28, 24));
+#else
         m_refreshModelsBtn = new wxButton(m_panel, wxID_ANY, wxT("\U0001F504"), wxDefaultPosition, wxSize(28, 24)); // 🔄
+#endif
         m_refreshModelsBtn->SetToolTip("Refresh available models from API");
         headerSizer->Add(m_refreshModelsBtn, 0, wxLEFT, 2);
         
         // Clear button
+#ifdef __WXMSW__
+        m_clearBtn = new wxButton(m_panel, wxID_ANY, wxT("X"), wxDefaultPosition, wxSize(28, 24));
+#else
         m_clearBtn = new wxButton(m_panel, wxID_ANY, wxT("\U0001F5D1"), wxDefaultPosition, wxSize(28, 24)); // 🗑
+#endif
         m_clearBtn->SetToolTip("Clear conversation");
         headerSizer->Add(m_clearBtn, 0, wxLEFT, 5);
         
@@ -840,7 +852,11 @@ public:
         
         // MCP tools toggle row
         wxBoxSizer* mcpSizer = new wxBoxSizer(wxHORIZONTAL);
+#ifdef __WXMSW__
+        m_mcpCheckbox = new wxCheckBox(m_panel, wxID_ANY, wxT("[F] File Access"));
+#else
         m_mcpCheckbox = new wxCheckBox(m_panel, wxID_ANY, wxT("\U0001F4C1 File Access")); // 📁
+#endif
         m_mcpCheckbox->SetValue(true);
         m_mcpCheckbox->SetToolTip("Allow AI to read files in the current workspace");
         mcpSizer->Add(m_mcpCheckbox, 0, wxALIGN_CENTER_VERTICAL);
@@ -1250,7 +1266,11 @@ private:
         
         // Show loading state
         m_isLoading = true;
+#ifdef __WXMSW__
+        UpdateStatus(wxT("[...] Thinking..."));
+#else
         UpdateStatus(wxT("\U0001F504 Thinking...")); // 🔄
+#endif
         m_sendBtn->Enable(false);
         
         // Send message in background thread
@@ -1433,7 +1453,11 @@ private:
             if (response.isToolCall) {
                 // Show tool call notification as a system message
                 AddToolCallBubble(response.toolName, response.toolArgs);
+#ifdef __WXMSW__
+                UpdateStatus(wxT("[...] Executing tool..."));
+#else
                 UpdateStatus(wxT("\U0001F504 Executing tool...")); // 🔄
+#endif
             } else {
                 AddMessageBubble(response.text, false, response.isError);
                 UpdateStatus("");

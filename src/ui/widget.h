@@ -55,17 +55,47 @@ struct WidgetCategory {
 };
 
 /**
+ * Platform-specific icon helper.
+ * Windows fonts often don't render emoji well, so we use ASCII alternatives.
+ */
+namespace PlatformIcons {
+#ifdef __WXMSW__
+    // Windows: Use ASCII-compatible symbols
+    inline const char* Folder()      { return "[F]"; }
+    inline const char* Code()        { return "</>"; }
+    inline const char* Clock()       { return "[T]"; }
+    inline const char* Robot()       { return "[AI]"; }
+    inline const char* Link()        { return "[+]"; }
+    inline const char* Tools()       { return "[#]"; }
+    inline const char* Gear()        { return "[*]"; }
+    inline const char* ArrowDown()   { return "v"; }
+    inline const char* ArrowRight()  { return ">"; }
+#else
+    // macOS/Linux: Use Unicode symbols (emoji)
+    inline const char* Folder()      { return "\xF0\x9F\x93\x81"; }  // 📁
+    inline const char* Code()        { return "\xE2\x9F\xA8\xE2\x9F\xA9"; }  // ⟨⟩
+    inline const char* Clock()       { return "\xE2\x8F\xB1"; }  // ⏱
+    inline const char* Robot()       { return "\xF0\x9F\xA4\x96"; }  // 🤖
+    inline const char* Link()        { return "\xF0\x9F\x94\x97"; }  // 🔗
+    inline const char* Tools()       { return "\xF0\x9F\x9B\xA0"; }  // 🛠
+    inline const char* Gear()        { return "\xE2\x9A\x99"; }  // ⚙
+    inline const char* ArrowDown()   { return "\xE2\x96\xBC"; }  // ▼
+    inline const char* ArrowRight()  { return "\xE2\x96\xB6"; }  // ▶
+#endif
+}
+
+/**
  * Predefined widget categories.
  */
 namespace WidgetCategories {
     // Core categories
-    inline WidgetCategory Explorer() { return WidgetCategory("explorer", "Explorer", "📁", 5); }
-    inline WidgetCategory Code() { return WidgetCategory("code", "Code", "⟨⟩", 7); }
-    inline WidgetCategory Productivity() { return WidgetCategory("productivity", "Productivity", "⏱", 10); }
-    inline WidgetCategory AI() { return WidgetCategory("ai", "AI Assistant", "🤖", 20); }
-    inline WidgetCategory Integrations() { return WidgetCategory("integrations", "Integrations", "🔗", 30); }
-    inline WidgetCategory Tools() { return WidgetCategory("tools", "Tools", "🛠", 40); }
-    inline WidgetCategory Settings() { return WidgetCategory("settings", "Settings", "⚙", 90); }
+    inline WidgetCategory Explorer() { return WidgetCategory("explorer", "Explorer", PlatformIcons::Folder(), 5); }
+    inline WidgetCategory Code() { return WidgetCategory("code", "Code", PlatformIcons::Code(), 7); }
+    inline WidgetCategory Productivity() { return WidgetCategory("productivity", "Productivity", PlatformIcons::Clock(), 10); }
+    inline WidgetCategory AI() { return WidgetCategory("ai", "AI Assistant", PlatformIcons::Robot(), 20); }
+    inline WidgetCategory Integrations() { return WidgetCategory("integrations", "Integrations", PlatformIcons::Link(), 30); }
+    inline WidgetCategory Tools() { return WidgetCategory("tools", "Tools", PlatformIcons::Tools(), 40); }
+    inline WidgetCategory Settings() { return WidgetCategory("settings", "Settings", PlatformIcons::Gear(), 90); }
 }
 
 /**

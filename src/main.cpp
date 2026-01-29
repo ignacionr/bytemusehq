@@ -27,9 +27,6 @@ public:
         // Set log level to include debug messages
         wxLog::SetLogLevel(wxLOG_Debug);
         
-        // Log a test message to verify the window is working
-        wxLogMessage("Debug log window initialized");
-        
         return true;
     }
     

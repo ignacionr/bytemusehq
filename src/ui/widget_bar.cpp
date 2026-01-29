@@ -25,9 +25,14 @@ WidgetContainer::WidgetContainer(wxWindow* parent, const wxString& widgetId, con
     
     wxBoxSizer* headerSizer = new wxBoxSizer(wxHORIZONTAL);
     
-    // Collapse button
-    m_collapseBtn = new wxButton(m_header, wxID_ANY, "▼", 
+    // Collapse button - use platform-specific arrow symbols
+#ifdef __WXMSW__
+    m_collapseBtn = new wxButton(m_header, wxID_ANY, "v", 
         wxDefaultPosition, wxSize(20, 20), wxBORDER_NONE | wxBU_EXACTFIT);
+#else
+    m_collapseBtn = new wxButton(m_header, wxID_ANY, "\xE2\x96\xBC",  // ▼
+        wxDefaultPosition, wxSize(20, 20), wxBORDER_NONE | wxBU_EXACTFIT);
+#endif
     m_collapseBtn->SetFont(wxFont(8, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL));
     m_collapseBtn->Bind(wxEVT_BUTTON, &WidgetContainer::OnCollapseButton, this);
     
@@ -82,7 +87,11 @@ void WidgetContainer::SetCollapsed(bool collapsed)
     }
     
     m_collapsed = collapsed;
-    m_collapseBtn->SetLabel(collapsed ? "▶" : "▼");
+#ifdef __WXMSW__
+    m_collapseBtn->SetLabel(collapsed ? ">" : "v");
+#else
+    m_collapseBtn->SetLabel(collapsed ? "\xE2\x96\xB6" : "\xE2\x96\xBC");  // ▶ : ▼
+#endif
     
     if (m_content) {
         m_content->Show(!collapsed);

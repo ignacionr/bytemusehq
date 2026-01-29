@@ -247,7 +247,11 @@ public:
         
         // Header with icon
         wxBoxSizer* headerSizer = new wxBoxSizer(wxHORIZONTAL);
+#ifdef __WXMSW__
+        m_headerLabel = new wxStaticText(m_panel, wxID_ANY, wxT("[J] JIRA Issues"));
+#else
         m_headerLabel = new wxStaticText(m_panel, wxID_ANY, wxT("\U0001F3AF JIRA Issues")); // 🎯
+#endif
         wxFont headerFont = m_headerLabel->GetFont();
         headerFont.SetWeight(wxFONTWEIGHT_BOLD);
         headerFont.SetPointSize(11);
@@ -255,7 +259,11 @@ public:
         headerSizer->Add(m_headerLabel, 1, wxALIGN_CENTER_VERTICAL);
         
         // Refresh button
+#ifdef __WXMSW__
+        m_refreshBtn = new wxButton(m_panel, wxID_ANY, wxT("R"), wxDefaultPosition, wxSize(28, 24));
+#else
         m_refreshBtn = new wxButton(m_panel, wxID_ANY, wxT("\U0001F504"), wxDefaultPosition, wxSize(28, 24)); // 🔄
+#endif
         m_refreshBtn->SetToolTip("Refresh issues");
         headerSizer->Add(m_refreshBtn, 0, wxLEFT, 5);
         
