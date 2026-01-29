@@ -9,6 +9,7 @@
 #include "../commands/builtin_commands.h"
 #include "../theme/theme.h"
 #include "builtin_widgets.h"
+#include "widget_bar.h"
 
 enum {
     ID_COMMAND_PALETTE = wxID_HIGHEST + 1,
@@ -71,7 +72,7 @@ void MainFrame::SetupUI()
     m_hSplitter = new wxSplitterWindow(m_mainPanel, wxID_ANY, 
         wxDefaultPosition, wxDefaultSize, wxSP_LIVE_UPDATE);
     
-    // Left area: Vertical splitter for tree/sidebar widgets
+    // Left area: Vertical splitter for tree/widget bar
     m_leftSplitter = new wxSplitterWindow(m_hSplitter, wxID_ANY,
         wxDefaultPosition, wxDefaultSize, wxSP_LIVE_UPDATE);
     
@@ -83,12 +84,10 @@ void MainFrame::SetupUI()
     leftSizer->Add(m_treeCtrl, 1, wxEXPAND | wxALL, 0);
     m_leftPanel->SetSizer(leftSizer);
     
-    // Sidebar widget container (for widgets like Timer)
-    m_sidebarWidgetContainer = new wxPanel(m_leftSplitter);
-    wxBoxSizer* sidebarSizer = new wxBoxSizer(wxVERTICAL);
-    m_sidebarWidgetContainer->SetSizer(sidebarSizer);
+    // Widget bar for sidebar widgets (Timer, Jira, etc.)
+    m_widgetBar = new WidgetBar(m_leftSplitter, m_widgetContext);
     
-    // Initially show only tree (sidebar widgets added later)
+    // Initially show only tree (widget bar added later if widgets are visible)
     m_leftSplitter->Initialize(m_leftPanel);
     m_leftSplitter->SetMinimumPaneSize(100);
     
@@ -157,9 +156,9 @@ void MainFrame::ApplyTheme(const ThemePtr& theme)
         m_leftPanel->SetBackgroundColour(ui.sidebarBackground);
     }
     
-    // Sidebar widget container
-    if (m_sidebarWidgetContainer) {
-        m_sidebarWidgetContainer->SetBackgroundColour(ui.sidebarBackground);
+    // Widget bar
+    if (m_widgetBar) {
+        m_widgetBar->ApplyTheme(theme);
     }
     
     // Left splitter
@@ -179,13 +178,6 @@ void MainFrame::ApplyTheme(const ThemePtr& theme)
     }
     if (m_rightSplitter) {
         m_rightSplitter->SetBackgroundColour(ui.border);
-    }
-    
-    // Sidebar splitters (for resizable widgets)
-    for (auto* splitter : m_sidebarSplitters) {
-        if (splitter) {
-            splitter->SetBackgroundColour(ui.border);
-        }
     }
     
     // Refresh all
@@ -332,7 +324,7 @@ void MainFrame::RegisterWidgets()
 
 void MainFrame::SetupSidebarWidgets()
 {
-    // Get all sidebar widgets from the registry and create their windows
+    // Get all sidebar widgets from the registry and add them to the widget bar
     auto& registry = WidgetRegistry::Instance();
     auto sidebarWidgets = registry.GetWidgetsByLocation(WidgetLocation::Sidebar);
     
@@ -341,197 +333,59 @@ void MainFrame::SetupSidebarWidgets()
         // Skip FileTree widget as it has dedicated handling
         if (info.id == "core.fileTree") continue;
         
-        // Create widget window (initially hidden, parented to container)
-        wxWindow* widgetWindow = widget->CreateWindow(m_sidebarWidgetContainer, m_widgetContext);
-        if (widgetWindow) {
-            m_sidebarWidgetWindows[info.id] = widgetWindow;
-            widget->RegisterCommands(m_widgetContext);
-            widget->OnThemeChanged(widgetWindow, m_widgetContext);
-            widgetWindow->Hide();  // Start hidden, RebuildSidebarLayout will show visible ones
-            
-            // Track visibility based on showByDefault
-            if (info.showByDefault) {
-                m_visibleSidebarWidgets.insert(info.id);
-            }
-        }
+        // Add widget to the widget bar
+        m_widgetBar->AddWidget(widget);
     }
     
-    // Build the initial layout
-    RebuildSidebarLayout();
+    // Build the initial layout and update visibility
+    m_widgetBar->RebuildLayout();
+    UpdateWidgetBarVisibility();
 }
 
-void MainFrame::RebuildSidebarLayout()
+void MainFrame::UpdateWidgetBarVisibility()
 {
-    wxBoxSizer* containerSizer = dynamic_cast<wxBoxSizer*>(m_sidebarWidgetContainer->GetSizer());
-    if (!containerSizer) return;
+    bool hasVisibleWidgets = m_widgetBar->HasVisibleWidgets();
     
-    // Detach all items from sizer (don't destroy windows)
-    containerSizer->Clear(false);
-    
-    // IMPORTANT: Reparent all widgets back to container BEFORE destroying splitters
-    // This prevents widgets from being destroyed along with their parent splitters
-    for (auto& [id, window] : m_sidebarWidgetWindows) {
-        if (window && window->GetParent() != m_sidebarWidgetContainer) {
-            window->Hide();
-            window->Reparent(m_sidebarWidgetContainer);
+    if (hasVisibleWidgets) {
+        // Show widget bar and split if needed
+        m_widgetBar->Show();
+        if (!m_leftSplitter->IsSplit()) {
+            m_leftSplitter->SplitHorizontally(m_leftPanel, m_widgetBar);
+            m_leftSplitter->SetSashGravity(0.5);
+            int height = m_leftSplitter->GetSize().GetHeight();
+            m_leftSplitter->SetSashPosition(height / 2);
         }
-    }
-    
-    // Now safe to destroy old splitters (they have no children)
-    for (auto* splitter : m_sidebarSplitters) {
-        splitter->Destroy();
-    }
-    m_sidebarSplitters.clear();
-    
-    // Collect visible widgets in order
-    auto& registry = WidgetRegistry::Instance();
-    auto sidebarWidgets = registry.GetWidgetsByLocation(WidgetLocation::Sidebar);
-    
-    std::vector<std::pair<wxString, wxWindow*>> visibleWidgets;
-    for (auto& widget : sidebarWidgets) {
-        auto info = widget->GetInfo();
-        if (info.id == "core.fileTree") continue;
-        
-        auto it = m_sidebarWidgetWindows.find(info.id);
-        if (it != m_sidebarWidgetWindows.end() && m_visibleSidebarWidgets.count(info.id)) {
-            visibleWidgets.push_back({info.id, it->second});
-        }
-    }
-    
-    // Hide all widget windows first
-    for (auto& [id, window] : m_sidebarWidgetWindows) {
-        if (window) window->Hide();
-    }
-    
-    if (visibleWidgets.empty()) {
-        // No visible widgets - hide the container
-        if (m_leftSplitter->IsSplit()) {
-            m_leftSplitter->Unsplit(m_sidebarWidgetContainer);
-        }
-        m_sidebarWidgetContainer->Hide();
-        return;
-    }
-    
-    // Build layout for visible widgets
-    if (visibleWidgets.size() == 1) {
-        // Single widget - add directly to container (already parented to container)
-        auto& [id, window] = visibleWidgets[0];
-        containerSizer->Add(window, 1, wxEXPAND);
-        window->Show();
     } else {
-        // Multiple widgets - use nested splitters
-        size_t numWidgets = visibleWidgets.size();
-        size_t numSplitters = numWidgets - 1;
-        
-        // Create splitters chain
-        for (size_t i = 0; i < numSplitters; ++i) {
-            wxWindow* parent = (i == 0) ? 
-                static_cast<wxWindow*>(m_sidebarWidgetContainer) : 
-                static_cast<wxWindow*>(m_sidebarSplitters[i - 1]);
-            
-            wxSplitterWindow* splitter = new wxSplitterWindow(
-                parent, wxID_ANY, wxDefaultPosition, wxDefaultSize,
-                wxSP_LIVE_UPDATE | wxSP_3DSASH);
-            splitter->SetMinimumPaneSize(60);
-            m_sidebarSplitters.push_back(splitter);
+        // No visible widgets - hide the widget bar
+        if (m_leftSplitter->IsSplit()) {
+            m_leftSplitter->Unsplit(m_widgetBar);
         }
-        
-        // Reparent visible widgets to their splitters
-        for (size_t i = 0; i < numWidgets; ++i) {
-            auto& [id, window] = visibleWidgets[i];
-            wxWindow* widgetParent;
-            if (i < numSplitters) {
-                widgetParent = m_sidebarSplitters[i];
-            } else {
-                widgetParent = m_sidebarSplitters[numSplitters - 1];
-            }
-            window->Reparent(widgetParent);
-            window->Show();
-        }
-        
-        // Perform splits from innermost to outermost
-        for (int i = (int)numSplitters - 1; i >= 0; --i) {
-            wxSplitterWindow* splitter = m_sidebarSplitters[i];
-            wxWindow* topPane = visibleWidgets[i].second;
-            wxWindow* bottomPane;
-            
-            if (i == (int)numSplitters - 1) {
-                bottomPane = visibleWidgets[i + 1].second;
-            } else {
-                bottomPane = m_sidebarSplitters[i + 1];
-            }
-            
-            if (topPane && bottomPane) {
-                splitter->SplitHorizontally(topPane, bottomPane);
-                double gravity = 1.0 / (numWidgets - i);
-                splitter->SetSashGravity(gravity);
-            }
-        }
-        
-        // Add root splitter to container
-        containerSizer->Add(m_sidebarSplitters[0], 1, wxEXPAND);
-        
-        // Apply theme to new splitters
-        auto theme = ThemeManager::Instance().GetCurrentTheme();
-        if (theme) {
-            for (auto* splitter : m_sidebarSplitters) {
-                splitter->SetBackgroundColour(theme->ui.border);
-            }
-        }
+        m_widgetBar->Hide();
     }
-    
-    // Show container and split if needed
-    m_sidebarWidgetContainer->Show();
-    if (!m_leftSplitter->IsSplit()) {
-        m_leftSplitter->SplitHorizontally(m_leftPanel, m_sidebarWidgetContainer);
-        m_leftSplitter->SetSashGravity(0.5);
-        int height = m_leftSplitter->GetSize().GetHeight();
-        m_leftSplitter->SetSashPosition(height / 2);
-    }
-    
-    m_sidebarWidgetContainer->Layout();
-    m_sidebarWidgetContainer->Refresh();
 }
 
 void MainFrame::ShowSidebarWidget(const wxString& widgetId, bool show)
 {
-    // Check if widget exists
-    if (m_sidebarWidgetWindows.find(widgetId) == m_sidebarWidgetWindows.end()) return;
-    
-    bool currentlyVisible = m_visibleSidebarWidgets.count(widgetId) > 0;
-    if (currentlyVisible == show) return;  // No change needed
-    
-    // Update visibility tracking
-    if (show) {
-        m_visibleSidebarWidgets.insert(widgetId);
-    } else {
-        m_visibleSidebarWidgets.erase(widgetId);
-    }
-    
-    // Rebuild the layout with the new visibility state
-    RebuildSidebarLayout();
+    m_widgetBar->ShowWidget(widgetId, show);
+    UpdateWidgetBarVisibility();
 }
 
 void MainFrame::ToggleSidebarWidget(const wxString& widgetId)
 {
-    ShowSidebarWidget(widgetId, !IsSidebarWidgetVisible(widgetId));
+    m_widgetBar->ToggleWidget(widgetId);
+    UpdateWidgetBarVisibility();
 }
 
 bool MainFrame::IsSidebarWidgetVisible(const wxString& widgetId) const
 {
-    return m_visibleSidebarWidgets.count(widgetId) > 0;
+    return m_widgetBar->IsWidgetVisible(widgetId);
 }
 
 void MainFrame::NotifyThemeChanged()
 {
-    // Notify all widgets about theme change
-    auto& registry = WidgetRegistry::Instance();
-    
-    for (const auto& widget : registry.GetAllWidgets()) {
-        auto it = m_sidebarWidgetWindows.find(widget->GetInfo().id);
-        if (it != m_sidebarWidgetWindows.end() && it->second) {
-            widget->OnThemeChanged(it->second, m_widgetContext);
-        }
+    // Notify widget bar about theme change
+    if (m_widgetBar) {
+        m_widgetBar->NotifyThemeChanged();
     }
 }
 

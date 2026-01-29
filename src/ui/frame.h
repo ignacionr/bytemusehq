@@ -4,10 +4,10 @@
 #include <wx/wx.h>
 #include <wx/treectrl.h>
 #include <wx/splitter.h>
-#include <set>
 #include "editor.h"
 #include "terminal.h"
 #include "widget.h"
+#include "widget_bar.h"
 #include "../commands/command.h"
 #include "../theme/theme.h"
 
@@ -56,21 +56,16 @@ private:
     Terminal* m_terminal;
     wxSplitterWindow* m_rightSplitter; // Vertical splitter for editor/terminal
     wxSplitterWindow* m_hSplitter;     // Horizontal splitter (tree | right)
-    wxSplitterWindow* m_leftSplitter;  // Vertical splitter for tree/sidebar widgets
+    wxSplitterWindow* m_leftSplitter;  // Vertical splitter for tree/widget bar
     wxPanel* m_mainPanel;
     wxPanel* m_leftPanel;
-    wxPanel* m_sidebarWidgetContainer;  // Container for sidebar widgets
+    WidgetBar* m_widgetBar;  // Widget bar for sidebar widgets
     int m_themeListenerId;
     WidgetContext m_widgetContext;
     
-    // Track instantiated sidebar widgets and their windows
-    std::map<wxString, wxWindow*> m_sidebarWidgetWindows;
-    std::vector<wxSplitterWindow*> m_sidebarSplitters;  // Splitters for resizable widgets
-    std::set<wxString> m_visibleSidebarWidgets;  // Track which widgets should be visible
-    
     void SetupUI();
     void SetupSidebarWidgets();
-    void RebuildSidebarLayout();  // Rebuild splitter layout based on visible widgets
+    void UpdateWidgetBarVisibility();  // Show/hide widget bar based on visible widgets
     void SetupMenuBar();
     void SetupAccelerators();
     void RegisterCommands();

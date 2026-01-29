@@ -31,6 +31,7 @@ set(SOURCES
     src/ui/frame.cpp
     src/ui/editor.cpp
     src/ui/terminal.cpp
+    src/ui/widget_bar.cpp
     src/commands/command_palette.cpp
     src/config/config.cpp
     src/theme/theme.cpp
@@ -42,6 +43,7 @@ set(HEADERS
     src/ui/editor.h
     src/ui/terminal.h
     src/ui/widget.h
+    src/ui/widget_bar.h
     src/ui/builtin_widgets.h
     src/commands/command.h
     src/commands/command_registry.h
