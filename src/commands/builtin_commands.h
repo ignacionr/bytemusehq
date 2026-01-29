@@ -437,6 +437,25 @@ inline void RegisterAll() {
         }
     ));
 
+    registry.Register(MakeCommand(
+        "app.toggleDebugLog", "Toggle Debug Log Window", "Developer", "Ctrl+Shift+L",
+        "Show or hide the debug log window",
+        [](CommandContext& ctx) {
+            // Get the active log target (which should be our wxLogWindow)
+            wxLogWindow* logWindow = dynamic_cast<wxLogWindow*>(wxLog::GetActiveTarget());
+            if (logWindow) {
+                wxFrame* logFrame = logWindow->GetFrame();
+                if (logFrame) {
+                    bool show = !logFrame->IsShown();
+                    logFrame->Show(show);
+                    if (show) {
+                        logFrame->Raise();
+                    }
+                }
+            }
+        }
+    ));
+
     // ========== Theme Commands ==========
 
     registry.Register(MakeCommand(

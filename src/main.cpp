@@ -1,4 +1,5 @@
 #include <wx/app.h>
+#include <wx/log.h>
 #include "ui/frame.h"
 #include "config/config.h"
 #include "theme/theme.h"
@@ -14,6 +15,21 @@ public:
         
         auto frame = new MainFrame();
         frame->Show();
+        
+        // Create log window (hidden by default)
+        // Parameters: parent, title, show, passToOld
+        // passToOld=true keeps stderr output as well (useful during development)
+        m_logWindow = new wxLogWindow(frame, "Debug Log", false, true);
+        
+        // Enable verbose logging so wxLogDebug messages are shown
+        wxLog::SetVerbose(true);
+        
+        // Set log level to include debug messages
+        wxLog::SetLogLevel(wxLOG_Debug);
+        
+        // Log a test message to verify the window is working
+        wxLogMessage("Debug log window initialized");
+        
         return true;
     }
     
@@ -22,6 +38,30 @@ public:
         Config::Instance().Save();
         return wxApp::OnExit();
     }
+    
+    // Toggle visibility of the log window
+    void ToggleLogWindow() {
+        if (m_logWindow) {
+            wxFrame* logFrame = m_logWindow->GetFrame();
+            if (logFrame) {
+                logFrame->Show(!logFrame->IsShown());
+                if (logFrame->IsShown()) {
+                    logFrame->Raise();
+                }
+            }
+        }
+    }
+    
+    bool IsLogWindowVisible() const {
+        if (m_logWindow) {
+            wxFrame* logFrame = m_logWindow->GetFrame();
+            return logFrame && logFrame->IsShown();
+        }
+        return false;
+    }
+    
+private:
+    wxLogWindow* m_logWindow = nullptr;
 };
 
 wxIMPLEMENT_APP(ByteMuseApp);
