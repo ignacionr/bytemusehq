@@ -507,8 +507,9 @@ private:
             }
         }
         
-        // Validate working directory if specified
-        if (!workDir.empty() && !wxFileName::DirExists(wxString(workDir))) {
+        // Validate working directory if specified (only for local execution)
+        // Skip validation for SSH remote execution since the path is on the remote machine
+        if (!m_sshConfig.isValid() && !workDir.empty() && !wxFileName::DirExists(wxString(workDir))) {
             return ToolResult::Error("Working directory does not exist: " + workDir);
         }
         
