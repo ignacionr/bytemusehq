@@ -195,19 +195,22 @@ public:
      * Get all indexed symbols.
      * Returns a vector of all symbols across the workspace.
      */
-    const std::vector<std::pair<wxString, LspDocumentSymbol>>& GetAllSymbols() const {
+    const std::vector<std::pair<std::string, LspDocumentSymbol>>& GetAllSymbols() const {
         return m_allSymbols;
     }
     
     /**
      * Search symbols by name (fuzzy match).
      */
-    std::vector<std::pair<wxString, LspDocumentSymbol>> SearchSymbols(const wxString& query) const {
-        std::vector<std::pair<wxString, LspDocumentSymbol>> results;
-        wxString lowerQuery = query.Lower();
+    std::vector<std::pair<std::string, LspDocumentSymbol>> SearchSymbols(const std::string& query) const {
+        std::vector<std::pair<std::string, LspDocumentSymbol>> results;
+        std::string lowerQuery = query;
+        std::transform(lowerQuery.begin(), lowerQuery.end(), lowerQuery.begin(), ::tolower);
         
         for (const auto& [filePath, symbol] : m_allSymbols) {
-            if (symbol.name.Lower().Contains(lowerQuery)) {
+            std::string lowerName = symbol.name;
+            std::transform(lowerName.begin(), lowerName.end(), lowerName.begin(), ::tolower);
+            if (lowerName.find(lowerQuery) != std::string::npos) {
                 results.push_back({filePath, symbol});
             }
         }
@@ -215,8 +218,12 @@ public:
         // Sort by relevance (exact prefix match first, then contains)
         std::sort(results.begin(), results.end(), 
             [&lowerQuery](const auto& a, const auto& b) {
-                bool aPrefix = a.second.name.Lower().StartsWith(lowerQuery);
-                bool bPrefix = b.second.name.Lower().StartsWith(lowerQuery);
+                std::string aLower = a.second.name;
+                std::transform(aLower.begin(), aLower.end(), aLower.begin(), ::tolower);
+                std::string bLower = b.second.name;
+                std::transform(bLower.begin(), bLower.end(), bLower.begin(), ::tolower);
+                bool aPrefix = aLower.find(lowerQuery) == 0;
+                bool bPrefix = bLower.find(lowerQuery) == 0;
                 if (aPrefix != bPrefix) return aPrefix;
                 return a.second.name.length() < b.second.name.length();
             });
@@ -289,9 +296,9 @@ private:
     wxString m_workspaceRoot;
     
     // Index data
-    std::vector<std::pair<wxString, LspDocumentSymbol>> m_allSymbols;
-    std::set<wxString> m_indexedFiles;
-    std::vector<wxString> m_filesToIndex;
+    std::vector<std::pair<std::string, LspDocumentSymbol>> m_allSymbols;
+    std::set<std::string> m_indexedFiles;
+    std::vector<std::string> m_filesToIndex;
     size_t m_currentIndexFile = 0;
     bool m_indexingComplete = false;
     
@@ -448,7 +455,7 @@ private:
             wxString ext = filename.AfterLast('.').Lower();
             if (m_sourceExtensions.count(ext)) {
                 wxString fullPath = wxFileName(dirPath, filename).GetFullPath();
-                m_filesToIndex.push_back(fullPath);
+                m_filesToIndex.push_back(std::string(fullPath.ToUTF8().data()));
             }
             cont = dir.GetNext(&filename);
         }
@@ -512,7 +519,7 @@ private:
             wxTheApp->CallAfter([this, filePath, uri, symbols]() {
                 // Store symbols
                 CollectSymbols(filePath, symbols);
-                m_indexedFiles.insert(filePath);
+                m_indexedFiles.insert(std::string(filePath.ToUTF8().data()));
                 
                 // Close the document to free LSP memory
                 m_lspClient->DidClose(uri);
@@ -529,7 +536,7 @@ private:
      */
     void CollectSymbols(const wxString& filePath, const std::vector<LspDocumentSymbol>& symbols) {
         for (const auto& symbol : symbols) {
-            m_allSymbols.push_back({filePath, symbol});
+            m_allSymbols.push_back({std::string(filePath.ToUTF8().data()), symbol});
             
             // Collect children
             if (!symbol.children.empty()) {
@@ -541,19 +548,22 @@ private:
     /**
      * Rebuild the tree view with current symbols.
      */
-    void RebuildTree(const wxString& filter = "") {
+    void RebuildTree(const std::string& filter = "") {
         m_treeCtrl->Freeze();
         m_treeCtrl->DeleteAllItems();
         wxTreeItemId root = m_treeCtrl->AddRoot("Workspace");
         
-        wxString lowerFilter = filter.Lower();
+        std::string lowerFilter = filter;
+        std::transform(lowerFilter.begin(), lowerFilter.end(), lowerFilter.begin(), ::tolower);
         
         // Group symbols by file
-        std::map<wxString, std::vector<const LspDocumentSymbol*>> fileSymbols;
+        std::map<std::string, std::vector<const LspDocumentSymbol*>> fileSymbols;
         
         for (const auto& [filePath, symbol] : m_allSymbols) {
             // Apply filter
-            if (!lowerFilter.IsEmpty() && !symbol.name.Lower().Contains(lowerFilter)) {
+            std::string lowerName = symbol.name;
+            std::transform(lowerName.begin(), lowerName.end(), lowerName.begin(), ::tolower);
+            if (!lowerFilter.empty() && lowerName.find(lowerFilter) == std::string::npos) {
                 continue;
             }
             fileSymbols[filePath].push_back(&symbol);
@@ -576,7 +586,7 @@ private:
             for (const auto* symbol : symbols) {
                 wxString icon = GetSymbolKindIcon(symbol->kind);
                 wxString label = icon + " " + symbol->name;
-                if (!symbol->detail.IsEmpty()) {
+                if (!symbol->detail.empty()) {
                     label += " : " + symbol->detail;
                 }
                 m_treeCtrl->AppendItem(fileItem, label, -1, -1, 
@@ -584,7 +594,7 @@ private:
             }
             
             // Expand file node if filtering
-            if (!lowerFilter.IsEmpty()) {
+            if (!lowerFilter.empty()) {
                 m_treeCtrl->Expand(fileItem);
             }
         }
@@ -592,7 +602,7 @@ private:
         m_treeCtrl->Thaw();
         
         // Expand all if filtering
-        if (!lowerFilter.IsEmpty()) {
+        if (!lowerFilter.empty()) {
             m_treeCtrl->ExpandAll();
         }
     }
@@ -677,14 +687,14 @@ private:
     void OnSearchTextChanged(wxCommandEvent& event) {
         // Rebuild tree with filter as user types
         if (m_indexingComplete) {
-            RebuildTree(m_searchCtrl->GetValue());
+            RebuildTree(std::string(m_searchCtrl->GetValue().ToUTF8().data()));
         }
     }
     
     void OnSearch(wxCommandEvent& event) {
         // Same as text changed, but also focus tree
         if (m_indexingComplete) {
-            RebuildTree(m_searchCtrl->GetValue());
+            RebuildTree(std::string(m_searchCtrl->GetValue().ToUTF8().data()));
             m_treeCtrl->SetFocus();
         }
     }

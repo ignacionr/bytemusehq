@@ -9,6 +9,10 @@
 #include <queue>
 #include <memory>
 #include <sstream>
+// Use Glaze for JSON parsing instead of ad-hoc parser
+#include <glaze/glaze.hpp>
+
+using JsonValue = glz::generic;
 
 /**
  * LSP (Language Server Protocol) client for ByteMuseHQ.
@@ -28,27 +32,20 @@ class LspClient;
 struct LspPosition {
     int line = 0;      // 0-based line number
     int character = 0; // 0-based character offset
-    
-    wxString ToJson() const {
-        return wxString::Format(R"({"line":%d,"character":%d})", line, character);
-    }
 };
 
 struct LspRange {
     LspPosition start;
     LspPosition end;
-    
-    wxString ToJson() const {
-        return wxString::Format(R"({"start":%s,"end":%s})", 
-            start.ToJson(), end.ToJson());
-    }
 };
 
 struct LspLocation {
-    wxString uri;
+    std::string uri;
     LspRange range;
 };
 
+// Glaze metadata for LSP types (used for parsing with glaze::read)
+// Move these to global namespace at the end of the file
 enum class LspSymbolKind {
     File = 1,
     Module = 2,
@@ -79,8 +76,8 @@ enum class LspSymbolKind {
 };
 
 struct LspDocumentSymbol {
-    wxString name;
-    wxString detail;
+    std::string name;
+    std::string detail;
     LspSymbolKind kind;
     LspRange range;
     LspRange selectionRange;
@@ -90,18 +87,151 @@ struct LspDocumentSymbol {
 struct LspDiagnostic {
     LspRange range;
     int severity; // 1=Error, 2=Warning, 3=Info, 4=Hint
-    wxString code;
-    wxString source;
-    wxString message;
+    std::string code;
+    std::string source;
+    std::string message;
 };
 
+
+
 struct LspCompletionItem {
-    wxString label;
+    std::string label;
     int kind;
-    wxString detail;
-    wxString documentation;
-    wxString insertText;
+    std::string detail;
+    std::string documentation;
+    std::string insertText;
 };
+
+template<> struct glz::meta<LspPosition> {
+    using T = LspPosition;
+    static constexpr auto value = object("line", &T::line, "character", &T::character);
+};
+
+template<> struct glz::meta<LspRange> {
+    using T = LspRange;
+    static constexpr auto value = object("start", &T::start, "end", &T::end);
+};
+
+template<> struct glz::meta<LspLocation> {
+    using T = LspLocation;
+    static constexpr auto value = object("uri", &T::uri, "range", &T::range);
+};
+
+template<> struct glz::meta<LspDocumentSymbol> {
+    using T = LspDocumentSymbol;
+    static constexpr auto value = object("name", &T::name, "detail", &T::detail, "kind", &T::kind, "range", &T::range, "selectionRange", &T::selectionRange, "children", &T::children);
+};
+
+template<> struct glz::meta<LspDiagnostic> {
+    using T = LspDiagnostic;
+    static constexpr auto value = object("range", &T::range, "severity", &T::severity, "code", &T::code, "source", &T::source, "message", &T::message);
+};
+
+template<> struct glz::meta<LspCompletionItem> {
+    using T = LspCompletionItem;
+    static constexpr auto value = object("label", &T::label, "kind", &T::kind, "detail", &T::detail, "documentation", &T::documentation, "insertText", &T::insertText);
+};
+
+// Glaze-friendly mirror types using std::string where needed
+struct GzDiagnostic {
+    LspRange range;
+    int severity;
+    std::string code;
+    std::string source;
+    std::string message;
+};
+
+template<> struct glz::meta<GzDiagnostic> {
+    using T = GzDiagnostic;
+    static constexpr auto value = object("range", &T::range, "severity", &T::severity, "code", &T::code, "source", &T::source, "message", &T::message);
+};
+
+struct DiagnosticsParams {
+    std::string uri;
+    std::vector<GzDiagnostic> diagnostics;
+};
+
+template<> struct glz::meta<DiagnosticsParams> {
+    using T = DiagnosticsParams;
+    static constexpr auto value = object("uri", &T::uri, "diagnostics", &T::diagnostics);
+};
+
+
+struct GzDocumentSymbol {
+    std::string name;
+    std::string detail;
+    int kind;
+    LspRange range;
+    LspRange selectionRange;
+    std::vector<GzDocumentSymbol> children;
+};
+
+template<> struct glz::meta<GzDocumentSymbol> {
+    using T = GzDocumentSymbol;
+    static constexpr auto value = object("name", &T::name, "detail", &T::detail, "kind", &T::kind, "range", &T::range, "selectionRange", &T::selectionRange, "children", &T::children);
+};
+
+struct GzLocation {
+    std::string uri;
+    LspRange range;
+};
+
+template<> struct glz::meta<GzLocation> {
+    using T = GzLocation;
+    static constexpr auto value = object("uri", &T::uri, "range", &T::range);
+};
+
+struct GzCompletionItem {
+    std::string label;
+    int kind;
+    std::string detail;
+    std::string documentation;
+    std::string insertText;
+};
+
+template<> struct glz::meta<GzCompletionItem> {
+    using T = GzCompletionItem;
+    static constexpr auto value = object("label", &T::label, "kind", &T::kind, "detail", &T::detail, "documentation", &T::documentation, "insertText", &T::insertText);
+};
+
+// Helper converters from Gz* to LSP types
+static LspDiagnostic fromGzDiagnostic(const GzDiagnostic& g) {
+    LspDiagnostic d;
+    d.severity = g.severity;
+    d.code = g.code;
+    d.source = g.source;
+    d.message = g.message;
+    d.range = g.range;
+    return d;
+}
+
+static LspDocumentSymbol fromGzDocumentSymbol(const GzDocumentSymbol& g) {
+    LspDocumentSymbol s;
+    s.name = g.name;
+    s.detail = g.detail;
+    s.kind = static_cast<LspSymbolKind>(g.kind);
+    s.range = g.range;
+    s.selectionRange = g.selectionRange;
+    for (const auto& c : g.children) s.children.push_back(fromGzDocumentSymbol(c));
+    return s;
+}
+
+static LspLocation fromGzLocation(const GzLocation& g) {
+    LspLocation l;
+    l.uri = g.uri;
+    l.range = g.range;
+    return l;
+}
+
+static LspCompletionItem fromGzCompletionItem(const GzCompletionItem& g) {
+    LspCompletionItem i;
+    i.label = g.label;
+    i.kind = g.kind;
+    i.detail = g.detail;
+    i.documentation = g.documentation;
+    i.insertText = g.insertText;
+    return i;
+}
 
 // ============================================================================
 // Callbacks
@@ -110,7 +240,7 @@ struct LspCompletionItem {
 using InitializeCallback = std::function<void(bool success)>;
 using SymbolsCallback = std::function<void(const std::vector<LspDocumentSymbol>& symbols)>;
 using LocationCallback = std::function<void(const std::vector<LspLocation>& locations)>;
-using DiagnosticsCallback = std::function<void(const wxString& uri, const std::vector<LspDiagnostic>& diagnostics)>;
+using DiagnosticsCallback = std::function<void(const std::string& uri, const std::vector<LspDiagnostic>& diagnostics)>;
 using CompletionCallback = std::function<void(const std::vector<LspCompletionItem>& items)>;
 
 // ============================================================================
@@ -178,230 +308,6 @@ struct LspSshConfig {
  * Minimal JSON builder for LSP messages.
  * For a production implementation, consider using nlohmann/json or rapidjson.
  */
-class JsonBuilder {
-public:
-    static wxString Object(const std::vector<std::pair<wxString, wxString>>& fields) {
-        wxString result = "{";
-        for (size_t i = 0; i < fields.size(); ++i) {
-            if (i > 0) result += ",";
-            result += "\"" + fields[i].first + "\":" + fields[i].second;
-        }
-        result += "}";
-        return result;
-    }
-    
-    static wxString String(const wxString& s) {
-        wxString escaped = s;
-        escaped.Replace("\\", "\\\\");
-        escaped.Replace("\"", "\\\"");
-        escaped.Replace("\n", "\\n");
-        escaped.Replace("\r", "\\r");
-        escaped.Replace("\t", "\\t");
-        return "\"" + escaped + "\"";
-    }
-    
-    static wxString Number(int n) {
-        return wxString::Format("%d", n);
-    }
-    
-    static wxString Bool(bool b) {
-        return b ? "true" : "false";
-    }
-    
-    static wxString Null() {
-        return "null";
-    }
-    
-    static wxString Array(const std::vector<wxString>& items) {
-        wxString result = "[";
-        for (size_t i = 0; i < items.size(); ++i) {
-            if (i > 0) result += ",";
-            result += items[i];
-        }
-        result += "]";
-        return result;
-    }
-};
-
-// ============================================================================
-// Simple JSON Parser (minimal implementation)
-// ============================================================================
-
-/**
- * Minimal JSON parser for LSP responses.
- * Handles basic types: objects, arrays, strings, numbers, bools, null.
- */
-class JsonValue {
-public:
-    enum Type { Null, Bool, Number, String, Array, Object };
-    
-    Type type = Null;
-    bool boolValue = false;
-    double numberValue = 0;
-    wxString stringValue;
-    std::vector<JsonValue> arrayValue;
-    std::map<wxString, JsonValue> objectValue;
-    
-    bool IsNull() const { return type == Null; }
-    bool IsBool() const { return type == Bool; }
-    bool IsNumber() const { return type == Number; }
-    bool IsString() const { return type == String; }
-    bool IsArray() const { return type == Array; }
-    bool IsObject() const { return type == Object; }
-    
-    const JsonValue& operator[](const wxString& key) const {
-        static JsonValue null;
-        if (type != Object) return null;
-        auto it = objectValue.find(key);
-        return it != objectValue.end() ? it->second : null;
-    }
-    
-    const JsonValue& operator[](size_t index) const {
-        static JsonValue null;
-        if (type != Array || index >= arrayValue.size()) return null;
-        return arrayValue[index];
-    }
-    
-    int GetInt(int defaultVal = 0) const {
-        return type == Number ? static_cast<int>(numberValue) : defaultVal;
-    }
-    
-    wxString GetString(const wxString& defaultVal = "") const {
-        return type == String ? stringValue : defaultVal;
-    }
-    
-    bool GetBool(bool defaultVal = false) const {
-        return type == Bool ? boolValue : defaultVal;
-    }
-    
-    size_t Size() const {
-        return type == Array ? arrayValue.size() : 0;
-    }
-    
-    bool Has(const wxString& key) const {
-        return type == Object && objectValue.find(key) != objectValue.end();
-    }
-    
-    static JsonValue Parse(const wxString& json);
-    
-private:
-    static JsonValue ParseValue(const wxString& json, size_t& pos);
-    static void SkipWhitespace(const wxString& json, size_t& pos);
-    static wxString ParseString(const wxString& json, size_t& pos);
-    static double ParseNumber(const wxString& json, size_t& pos);
-};
-
-// JSON Parser implementation
-inline void JsonValue::SkipWhitespace(const wxString& json, size_t& pos) {
-    while (pos < json.length() && (json[pos] == ' ' || json[pos] == '\t' || 
-           json[pos] == '\n' || json[pos] == '\r')) {
-        pos++;
-    }
-}
-
-inline wxString JsonValue::ParseString(const wxString& json, size_t& pos) {
-    pos++; // Skip opening quote
-    wxString result;
-    while (pos < json.length() && json[pos] != '"') {
-        if (json[pos] == '\\' && pos + 1 < json.length()) {
-            pos++;
-            switch (json[pos].IsAscii() ? static_cast<char>(json[pos]) : 0) {
-                case 'n': result += '\n'; break;
-                case 'r': result += '\r'; break;
-                case 't': result += '\t'; break;
-                case '"': result += '"'; break;
-                case '\\': result += '\\'; break;
-                default: result += json[pos]; break;
-            }
-        } else {
-            result += json[pos];
-        }
-        pos++;
-    }
-    pos++; // Skip closing quote
-    return result;
-}
-
-inline double JsonValue::ParseNumber(const wxString& json, size_t& pos) {
-    size_t start = pos;
-    if (json[pos] == '-') pos++;
-    while (pos < json.length() && (json[pos] >= '0' && json[pos] <= '9')) pos++;
-    if (pos < json.length() && json[pos] == '.') {
-        pos++;
-        while (pos < json.length() && (json[pos] >= '0' && json[pos] <= '9')) pos++;
-    }
-    if (pos < json.length() && (json[pos] == 'e' || json[pos] == 'E')) {
-        pos++;
-        if (pos < json.length() && (json[pos] == '+' || json[pos] == '-')) pos++;
-        while (pos < json.length() && (json[pos] >= '0' && json[pos] <= '9')) pos++;
-    }
-    double val = 0;
-    json.Mid(start, pos - start).ToDouble(&val);
-    return val;
-}
-
-inline JsonValue JsonValue::ParseValue(const wxString& json, size_t& pos) {
-    SkipWhitespace(json, pos);
-    if (pos >= json.length()) return JsonValue();
-    
-    JsonValue value;
-    char c = json[pos].IsAscii() ? static_cast<char>(json[pos]) : 0;
-    
-    if (c == '"') {
-        value.type = String;
-        value.stringValue = ParseString(json, pos);
-    } else if (c == '{') {
-        value.type = Object;
-        pos++; // Skip '{'
-        SkipWhitespace(json, pos);
-        while (pos < json.length() && json[pos] != '}') {
-            SkipWhitespace(json, pos);
-            if (json[pos] == '"') {
-                wxString key = ParseString(json, pos);
-                SkipWhitespace(json, pos);
-                if (pos < json.length() && json[pos] == ':') pos++;
-                value.objectValue[key] = ParseValue(json, pos);
-                SkipWhitespace(json, pos);
-                if (pos < json.length() && json[pos] == ',') pos++;
-            } else {
-                break;
-            }
-        }
-        if (pos < json.length()) pos++; // Skip '}'
-    } else if (c == '[') {
-        value.type = Array;
-        pos++; // Skip '['
-        SkipWhitespace(json, pos);
-        while (pos < json.length() && json[pos] != ']') {
-            value.arrayValue.push_back(ParseValue(json, pos));
-            SkipWhitespace(json, pos);
-            if (pos < json.length() && json[pos] == ',') pos++;
-            SkipWhitespace(json, pos);
-        }
-        if (pos < json.length()) pos++; // Skip ']'
-    } else if (c == 't' && json.Mid(pos, 4) == "true") {
-        value.type = Bool;
-        value.boolValue = true;
-        pos += 4;
-    } else if (c == 'f' && json.Mid(pos, 5) == "false") {
-        value.type = Bool;
-        value.boolValue = false;
-        pos += 5;
-    } else if (c == 'n' && json.Mid(pos, 4) == "null") {
-        value.type = Null;
-        pos += 4;
-    } else if (c == '-' || (c >= '0' && c <= '9')) {
-        value.type = Number;
-        value.numberValue = ParseNumber(json, pos);
-    }
-    
-    return value;
-}
-
-inline JsonValue JsonValue::Parse(const wxString& json) {
-    size_t pos = 0;
-    return ParseValue(json, pos);
-}
 
 // ============================================================================
 // LSP Client
@@ -431,8 +337,16 @@ inline JsonValue JsonValue::Parse(const wxString& json) {
  * @endcode
  */
 class LspClient : public wxEvtHandler {
+private:
+    wxProcess* m_process = nullptr;
+    wxTimer m_pollTimer;
+    wxString m_workspaceRoot;
+    int m_nextId = 1;
+    bool m_initialized = false;
+    LspSshConfig m_sshConfig;
+    
 public:
-    LspClient() : m_process(nullptr), m_nextId(1), m_initialized(false) {}
+    LspClient() = default;
     
     ~LspClient() {
         Stop();
@@ -509,7 +423,7 @@ public:
         Bind(wxEVT_END_PROCESS, &LspClient::OnProcessTerminated, this);
         
         // Start a timer to poll for output
-        m_pollTimer.Bind(wxEVT_TIMER, &LspClient::OnPollTimer, this);
+        Bind(wxEVT_TIMER, &LspClient::OnPollTimer, this, m_pollTimer.GetId());
         m_pollTimer.Start(50); // Poll every 50ms
         
         return true;
@@ -557,112 +471,76 @@ public:
      */
     void Initialize(InitializeCallback callback) {
         wxString rootUri = "file://" + m_workspaceRoot;
-        
-        wxString params = JsonBuilder::Object({
-            {"processId", JsonBuilder::Number(wxGetProcessId())},
-            {"rootUri", JsonBuilder::String(rootUri)},
-            {"capabilities", JsonBuilder::Object({
-                {"textDocument", JsonBuilder::Object({
-                    {"synchronization", JsonBuilder::Object({
-                        {"didSave", JsonBuilder::Bool(true)}
-                    })},
-                    {"completion", JsonBuilder::Object({
-                        {"completionItem", JsonBuilder::Object({
-                            {"snippetSupport", JsonBuilder::Bool(false)}
-                        })}
-                    })},
-                    {"documentSymbol", JsonBuilder::Object({
-                        {"hierarchicalDocumentSymbolSupport", JsonBuilder::Bool(true)}
-                    })},
-                    {"definition", JsonBuilder::Object({})},
-                    {"references", JsonBuilder::Object({})},
-                    {"hover", JsonBuilder::Object({})}
-                })}
-            })}
-        });
-        
+        struct InitParams {
+            int processId;
+            std::string rootUri;
+        };
+        InitParams paramsStruct{static_cast<int>(wxGetProcessId()), std::string(rootUri.ToUTF8().data())};
+        std::string params = glz::write_json(paramsStruct).value();
         int id = SendRequest("initialize", params);
-        m_pendingRequests[id] = [this, callback](const JsonValue& result) {
-            m_initialized = !result.IsNull();
-            
-            // Send initialized notification
-            if (m_initialized) {
+        m_pendingRequests[id] = [this, callback](const std::string& resultJson) {
+            // Parse the initialize response
+            glz::generic result;
+            auto ec = glz::read_json(result, resultJson);
+            if (!ec) {
+                // Send initialized notification
                 SendNotification("initialized", "{}");
-            }
-            
-            if (callback) {
-                callback(m_initialized);
+                m_initialized = true;
+                if (callback) {
+                    callback(true);
+                }
+            } else {
+                if (callback) {
+                    callback(false);
+                }
             }
         };
     }
-    
-    // ========================================================================
-    // Document Management
-    // ========================================================================
-    
-    /**
-     * Notify the server that a document was opened.
-     */
     void DidOpen(const wxString& uri, const wxString& languageId, const wxString& content) {
-        wxString params = JsonBuilder::Object({
-            {"textDocument", JsonBuilder::Object({
-                {"uri", JsonBuilder::String(uri)},
-                {"languageId", JsonBuilder::String(languageId)},
-                {"version", JsonBuilder::Number(1)},
-                {"text", JsonBuilder::String(content)}
-            })}
-        });
-        
+        struct DidOpenParams {
+            struct {
+                std::string uri;
+                std::string languageId;
+                int version = 1;
+                std::string text;
+            } textDocument;
+        };
+        DidOpenParams paramsStruct;
+        paramsStruct.textDocument.uri = std::string(uri.ToUTF8().data());
+        paramsStruct.textDocument.languageId = std::string(languageId.ToUTF8().data());
+        paramsStruct.textDocument.text = std::string(content.ToUTF8().data());
+        std::string params = glz::write_json(paramsStruct).value();
         SendNotification("textDocument/didOpen", params);
-        m_documentVersions[uri] = 1;
-    }
-    
-    /**
-     * Notify the server that a document was changed.
-     */
-    void DidChange(const wxString& uri, const wxString& content) {
-        int version = ++m_documentVersions[uri];
-        
-        wxString params = JsonBuilder::Object({
-            {"textDocument", JsonBuilder::Object({
-                {"uri", JsonBuilder::String(uri)},
-                {"version", JsonBuilder::Number(version)}
-            })},
-            {"contentChanges", JsonBuilder::Array({
-                JsonBuilder::Object({
-                    {"text", JsonBuilder::String(content)}
-                })
-            })}
-        });
-        
-        SendNotification("textDocument/didChange", params);
-    }
-    
-    /**
-     * Notify the server that a document was closed.
-     */
-    void DidClose(const wxString& uri) {
-        wxString params = JsonBuilder::Object({
-            {"textDocument", JsonBuilder::Object({
-                {"uri", JsonBuilder::String(uri)}
-            })}
-        });
-        
-        SendNotification("textDocument/didClose", params);
-        m_documentVersions.erase(uri);
     }
     
     /**
      * Notify the server that a document was saved.
      */
     void DidSave(const wxString& uri) {
-        wxString params = JsonBuilder::Object({
-            {"textDocument", JsonBuilder::Object({
-                {"uri", JsonBuilder::String(uri)}
-            })}
-        });
-        
+        struct DidSaveParams {
+            struct {
+                std::string uri;
+            } textDocument;
+        };
+        DidSaveParams paramsStruct;
+        paramsStruct.textDocument.uri = std::string(uri.ToUTF8().data());
+        std::string params = glz::write_json(paramsStruct).value();
         SendNotification("textDocument/didSave", params);
+    }
+    
+    /**
+     * Notify the server that a document was closed.
+     */
+    void DidClose(const wxString& uri) {
+        struct DidCloseParams {
+            struct {
+                std::string uri;
+            } textDocument;
+        };
+        DidCloseParams paramsStruct;
+        paramsStruct.textDocument.uri = std::string(uri.ToUTF8().data());
+        std::string params = glz::write_json(paramsStruct).value();
+        SendNotification("textDocument/didClose", params);
     }
     
     // ========================================================================
@@ -673,17 +551,21 @@ public:
      * Get document symbols (outline).
      */
     void GetDocumentSymbols(const wxString& uri, SymbolsCallback callback) {
-        wxString params = JsonBuilder::Object({
-            {"textDocument", JsonBuilder::Object({
-                {"uri", JsonBuilder::String(uri)}
-            })}
-        });
-        
+        struct TextDocumentParams {
+            struct {
+                std::string uri;
+            } textDocument;
+        };
+        TextDocumentParams paramsStruct;
+        paramsStruct.textDocument.uri = std::string(uri.ToUTF8().data());
+        std::string params = glz::write_json(paramsStruct).value();
         int id = SendRequest("textDocument/documentSymbol", params);
-        m_pendingRequests[id] = [callback](const JsonValue& result) {
+        m_pendingRequests[id] = [callback](const std::string& resultJson) {
+            std::vector<GzDocumentSymbol> parsed;
+            auto ec = glz::read<glz::opts{.error_on_unknown_keys = false}>(parsed, resultJson);
             std::vector<LspDocumentSymbol> symbols;
-            if (result.IsArray()) {
-                ParseSymbols(result, symbols);
+            if (!ec) {
+                for (const auto& g : parsed) symbols.push_back(fromGzDocumentSymbol(g));
             }
             if (callback) {
                 callback(symbols);
@@ -695,17 +577,24 @@ public:
      * Go to definition.
      */
     void GoToDefinition(const wxString& uri, const LspPosition& pos, LocationCallback callback) {
-        wxString params = JsonBuilder::Object({
-            {"textDocument", JsonBuilder::Object({
-                {"uri", JsonBuilder::String(uri)}
-            })},
-            {"position", pos.ToJson()}
-        });
-        
+        struct DefinitionParams {
+            struct {
+                std::string uri;
+            } textDocument;
+            LspPosition position;
+        };
+        DefinitionParams paramsStruct;
+        paramsStruct.textDocument.uri = std::string(uri.ToUTF8().data());
+        paramsStruct.position = pos;
+        std::string params = glz::write_json(paramsStruct).value();
         int id = SendRequest("textDocument/definition", params);
-        m_pendingRequests[id] = [callback](const JsonValue& result) {
+        m_pendingRequests[id] = [callback](const std::string& resultJson) {
+            std::vector<GzLocation> parsed;
+            auto ec = glz::read<glz::opts{.error_on_unknown_keys = false}>(parsed, resultJson);
             std::vector<LspLocation> locations;
-            ParseLocations(result, locations);
+            if (!ec) {
+                for (const auto& g : parsed) locations.push_back(fromGzLocation(g));
+            }
             if (callback) {
                 callback(locations);
             }
@@ -716,20 +605,28 @@ public:
      * Find all references.
      */
     void FindReferences(const wxString& uri, const LspPosition& pos, LocationCallback callback) {
-        wxString params = JsonBuilder::Object({
-            {"textDocument", JsonBuilder::Object({
-                {"uri", JsonBuilder::String(uri)}
-            })},
-            {"position", pos.ToJson()},
-            {"context", JsonBuilder::Object({
-                {"includeDeclaration", JsonBuilder::Bool(true)}
-            })}
-        });
-        
+        struct ReferencesParams {
+            struct {
+                std::string uri;
+            } textDocument;
+            LspPosition position;
+            struct {
+                bool includeDeclaration = true;
+            } context;
+        };
+        ReferencesParams paramsStruct;
+        paramsStruct.textDocument.uri = std::string(uri.ToUTF8().data());
+        paramsStruct.position = pos;
+        paramsStruct.context.includeDeclaration = true;
+        std::string params = glz::write_json(paramsStruct).value();
         int id = SendRequest("textDocument/references", params);
-        m_pendingRequests[id] = [callback](const JsonValue& result) {
+        m_pendingRequests[id] = [callback](const std::string& resultJson) {
+            std::vector<GzLocation> parsed;
+            auto ec = glz::read<glz::opts{.error_on_unknown_keys = false}>(parsed, resultJson);
             std::vector<LspLocation> locations;
-            ParseLocations(result, locations);
+            if (!ec) {
+                for (const auto& g : parsed) locations.push_back(fromGzLocation(g));
+            }
             if (callback) {
                 callback(locations);
             }
@@ -740,36 +637,24 @@ public:
      * Get completions at position.
      */
     void GetCompletions(const wxString& uri, const LspPosition& pos, CompletionCallback callback) {
-        wxString params = JsonBuilder::Object({
-            {"textDocument", JsonBuilder::Object({
-                {"uri", JsonBuilder::String(uri)}
-            })},
-            {"position", pos.ToJson()}
-        });
-        
+        struct CompletionParams {
+            struct {
+                std::string uri;
+            } textDocument;
+            LspPosition position;
+        };
+        CompletionParams paramsStruct;
+        paramsStruct.textDocument.uri = std::string(uri.ToUTF8().data());
+        paramsStruct.position = pos;
+        std::string params = glz::write_json(paramsStruct).value();
         int id = SendRequest("textDocument/completion", params);
-        m_pendingRequests[id] = [callback](const JsonValue& result) {
+        m_pendingRequests[id] = [callback](const std::string& resultJson) {
+            std::vector<GzCompletionItem> parsed;
+            auto ec = glz::read<glz::opts{.error_on_unknown_keys = false}>(parsed, resultJson);
             std::vector<LspCompletionItem> items;
-            
-            const JsonValue* itemsArray = nullptr;
-            if (result.IsArray()) {
-                itemsArray = &result;
-            } else if (result.IsObject() && result.Has("items")) {
-                itemsArray = &result["items"];
+            if (!ec) {
+                for (const auto& g : parsed) items.push_back(fromGzCompletionItem(g));
             }
-            
-            if (itemsArray && itemsArray->IsArray()) {
-                for (size_t i = 0; i < itemsArray->Size(); ++i) {
-                    const auto& item = (*itemsArray)[i];
-                    LspCompletionItem ci;
-                    ci.label = item["label"].GetString();
-                    ci.kind = item["kind"].GetInt();
-                    ci.detail = item["detail"].GetString();
-                    ci.insertText = item["insertText"].GetString(ci.label);
-                    items.push_back(ci);
-                }
-            }
-            
             if (callback) {
                 callback(items);
             }
@@ -788,46 +673,41 @@ public:
     }
     
 private:
-    wxProcess* m_process;
-    wxString m_workspaceRoot;
-    int m_nextId;
-    bool m_initialized;
-    wxTimer m_pollTimer;
     wxString m_inputBuffer;
-    LspSshConfig m_sshConfig;
     
-    std::map<int, std::function<void(const JsonValue&)>> m_pendingRequests;
+    std::map<int, std::function<void(const std::string&)>> m_pendingRequests;
     std::map<wxString, int> m_documentVersions;
     DiagnosticsCallback m_diagnosticsCallback;
     
     /**
      * Send a JSON-RPC request (expects a response).
      */
-    int SendRequest(const wxString& method, const wxString& params) {
+    int SendRequest(const std::string& method, const std::string& params) {
         int id = m_nextId++;
-        
-        wxString content = JsonBuilder::Object({
-            {"jsonrpc", JsonBuilder::String("2.0")},
-            {"id", JsonBuilder::Number(id)},
-            {"method", JsonBuilder::String(method)},
-            {"params", params}
-        });
-        
-        SendMessage(content);
+        struct Request {
+            std::string jsonrpc = "2.0";
+            int id;
+            std::string method;
+            std::string params;
+        };
+        Request req{.jsonrpc = "2.0", .id = id, .method = method, .params = params};
+        std::string content = glz::write_json(req).value();
+        SendMessage(wxString::FromUTF8(content.c_str()));
         return id;
     }
     
     /**
      * Send a JSON-RPC notification (no response expected).
      */
-    void SendNotification(const wxString& method, const wxString& params) {
-        wxString content = JsonBuilder::Object({
-            {"jsonrpc", JsonBuilder::String("2.0")},
-            {"method", JsonBuilder::String(method)},
-            {"params", params}
-        });
-        
-        SendMessage(content);
+    void SendNotification(const std::string& method, const std::string& params) {
+        struct Notification {
+            std::string jsonrpc = "2.0";
+            std::string method;
+            std::string params;
+        };
+        Notification notif{.jsonrpc = "2.0", .method = method, .params = params};
+        std::string content = glz::write_json(notif).value();
+        SendMessage(wxString::FromUTF8(content.c_str()));
     }
     
     /**
@@ -904,22 +784,25 @@ private:
      * Handle a received LSP message.
      */
     void HandleMessage(const wxString& content) {
-        JsonValue msg = JsonValue::Parse(content);
-        
-        if (msg.Has("id")) {
-            // Response to a request
-            int id = msg["id"].GetInt();
+        // Parse the message using Glaze
+        std::string contentStr = std::string(content.ToUTF8().data());
+        glz::generic msg;
+        auto ec = glz::read_json(msg, contentStr);
+        if (ec) return;
+
+        if (msg["id"].is_number()) {
+            int id = msg["id"].as<int>();
             auto it = m_pendingRequests.find(id);
             if (it != m_pendingRequests.end()) {
-                it->second(msg["result"]);
+                std::string result_json = glz::write_json(msg["result"]).value();
+                it->second(result_json);
                 m_pendingRequests.erase(it);
             }
-        } else if (msg.Has("method")) {
-            // Notification from server
-            wxString method = msg["method"].GetString();
-            
+        } else if (msg["method"].is_string()) {
+            std::string method = msg["method"].get<std::string>();
             if (method == "textDocument/publishDiagnostics") {
-                HandleDiagnostics(msg["params"]);
+                std::string params_json = glz::write_json(msg["params"]).value();
+                HandleDiagnostics(params_json);
             }
             // Handle other notifications as needed
         }
@@ -928,32 +811,16 @@ private:
     /**
      * Handle diagnostics notification.
      */
-    void HandleDiagnostics(const JsonValue& params) {
+    void HandleDiagnostics(const std::string& params) {
         if (!m_diagnosticsCallback) return;
-        
-        wxString uri = params["uri"].GetString();
+        DiagnosticsParams dp;
+        auto ec = glz::read<glz::opts{.error_on_unknown_keys = false}>(dp, params);
+        if (ec) return;
         std::vector<LspDiagnostic> diagnostics;
-        
-        const auto& diags = params["diagnostics"];
-        if (diags.IsArray()) {
-            for (size_t i = 0; i < diags.Size(); ++i) {
-                const auto& d = diags[i];
-                LspDiagnostic diag;
-                diag.message = d["message"].GetString();
-                diag.severity = d["severity"].GetInt(1);
-                diag.source = d["source"].GetString();
-                
-                const auto& range = d["range"];
-                diag.range.start.line = range["start"]["line"].GetInt();
-                diag.range.start.character = range["start"]["character"].GetInt();
-                diag.range.end.line = range["end"]["line"].GetInt();
-                diag.range.end.character = range["end"]["character"].GetInt();
-                
-                diagnostics.push_back(diag);
-            }
+        for (const auto& g : dp.diagnostics) {
+            diagnostics.push_back(fromGzDiagnostic(g));
         }
-        
-        m_diagnosticsCallback(uri, diagnostics);
+        m_diagnosticsCallback(dp.uri, diagnostics);
     }
     
     /**
@@ -968,59 +835,24 @@ private:
     /**
      * Parse document symbols from JSON response.
      */
-    static void ParseSymbols(const JsonValue& arr, std::vector<LspDocumentSymbol>& symbols) {
-        for (size_t i = 0; i < arr.Size(); ++i) {
-            const auto& item = arr[i];
-            LspDocumentSymbol sym;
-            sym.name = item["name"].GetString();
-            sym.detail = item["detail"].GetString();
-            sym.kind = static_cast<LspSymbolKind>(item["kind"].GetInt());
-            
-            const auto& range = item["range"];
-            sym.range.start.line = range["start"]["line"].GetInt();
-            sym.range.start.character = range["start"]["character"].GetInt();
-            sym.range.end.line = range["end"]["line"].GetInt();
-            sym.range.end.character = range["end"]["character"].GetInt();
-            
-            const auto& selRange = item["selectionRange"];
-            sym.selectionRange.start.line = selRange["start"]["line"].GetInt();
-            sym.selectionRange.start.character = selRange["start"]["character"].GetInt();
-            sym.selectionRange.end.line = selRange["end"]["line"].GetInt();
-            sym.selectionRange.end.character = selRange["end"]["character"].GetInt();
-            
-            // Parse children recursively
-            if (item.Has("children") && item["children"].IsArray()) {
-                ParseSymbols(item["children"], sym.children);
-            }
-            
-            symbols.push_back(sym);
+    static void ParseSymbols(const std::string& arr, std::vector<LspDocumentSymbol>& symbols) {
+        std::vector<GzDocumentSymbol> parsed;
+        auto ec = glz::read<glz::opts{.error_on_unknown_keys = false}>(parsed, arr);
+        if (!ec) {
+            symbols.clear();
+            for (const auto& g : parsed) symbols.push_back(fromGzDocumentSymbol(g));
         }
     }
     
     /**
      * Parse locations from JSON response.
      */
-    static void ParseLocations(const JsonValue& result, std::vector<LspLocation>& locations) {
-        if (result.IsArray()) {
-            for (size_t i = 0; i < result.Size(); ++i) {
-                LspLocation loc;
-                loc.uri = result[i]["uri"].GetString();
-                const auto& range = result[i]["range"];
-                loc.range.start.line = range["start"]["line"].GetInt();
-                loc.range.start.character = range["start"]["character"].GetInt();
-                loc.range.end.line = range["end"]["line"].GetInt();
-                loc.range.end.character = range["end"]["character"].GetInt();
-                locations.push_back(loc);
-            }
-        } else if (result.IsObject() && result.Has("uri")) {
-            LspLocation loc;
-            loc.uri = result["uri"].GetString();
-            const auto& range = result["range"];
-            loc.range.start.line = range["start"]["line"].GetInt();
-            loc.range.start.character = range["start"]["character"].GetInt();
-            loc.range.end.line = range["end"]["line"].GetInt();
-            loc.range.end.character = range["end"]["character"].GetInt();
-            locations.push_back(loc);
+    static void ParseLocations(const std::string& result, std::vector<LspLocation>& locations) {
+        std::vector<GzLocation> parsed;
+        auto ec = glz::read<glz::opts{.error_on_unknown_keys = false}>(parsed, result);
+        if (!ec) {
+            locations.clear();
+            for (const auto& g : parsed) locations.push_back(fromGzLocation(g));
         }
     }
 };
@@ -1123,5 +955,19 @@ inline wxString UriToPath(const wxString& uri) {
 #endif
     return path;
 }
+
+static void ParseLocations(const std::string& resultJson, std::vector<LspLocation>& locations) {
+    std::vector<GzLocation> parsed;
+    auto ec = glz::read<glz::opts{.error_on_unknown_keys = false}>(parsed, resultJson);
+    locations.clear();
+    if (!ec) {
+        for (const auto& g : parsed) locations.push_back(fromGzLocation(g));
+    }
+}
+
+// Glaze meta specializations for LSP types
+namespace glz {
+
+} // namespace glz
 
 #endif // LSP_CLIENT_H

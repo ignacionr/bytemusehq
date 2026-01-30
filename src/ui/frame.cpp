@@ -395,10 +395,10 @@ void MainFrame::ConnectCodeIndexToMCP(BuiltinWidgets::SymbolsWidget* symbolsWidg
     
     // Set up callbacks to the symbols widget
     codeIndexProvider->setSearchCallback([symbolsWidget](const std::string& query) {
-        auto results = symbolsWidget->SearchSymbols(wxString(query));
+        auto results = symbolsWidget->SearchSymbols(query);
         std::vector<std::pair<std::string, LspDocumentSymbol>> stdResults;
         for (const auto& [path, sym] : results) {
-            stdResults.push_back({path.ToStdString(), sym});
+            stdResults.push_back({path, sym});
         }
         return stdResults;
     });
@@ -412,7 +412,7 @@ void MainFrame::ConnectCodeIndexToMCP(BuiltinWidgets::SymbolsWidget* symbolsWidg
         std::vector<std::pair<std::string, LspDocumentSymbol>> stdResults;
         stdResults.reserve(wxSymbols.size());
         for (const auto& [path, sym] : wxSymbols) {
-            stdResults.push_back({path.ToStdString(), sym});
+            stdResults.push_back({path, sym});
         }
         return stdResults;
     });

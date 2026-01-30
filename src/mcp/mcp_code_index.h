@@ -225,14 +225,14 @@ private:
      */
     Value symbolToValue(const std::string& filePath, const LspDocumentSymbol& symbol) {
         std::map<std::string, Value> obj;
-        obj["name"] = symbol.name.ToStdString();
+        obj["name"] = symbol.name;
         obj["kind"] = symbolKindToString(symbol.kind);
         obj["file"] = filePath;
         obj["line"] = symbol.selectionRange.start.line + 1; // 1-indexed for humans
         obj["column"] = symbol.selectionRange.start.character + 1;
         
-        if (!symbol.detail.IsEmpty()) {
-            obj["detail"] = symbol.detail.ToStdString();
+        if (!symbol.detail.empty()) {
+            obj["detail"] = symbol.detail;
         }
         
         return Value(obj);
