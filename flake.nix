@@ -27,6 +27,7 @@
             wxGTK32
             curl
             glaze
+            gtest
           ];
 
           cmakeFlags = [ ];
@@ -45,6 +46,7 @@
             wxGTK32
             curl
             glaze
+            gtest
             gcc
             gdb
             clang-tools

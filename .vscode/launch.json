@@ -8,7 +8,7 @@
       "program": "${workspaceFolder}/build/bytemusehq",
       "args": [],
       "cwd": "${workspaceFolder}",
-      "preLaunchTask": "nix: build",
+      "preLaunchTask": "nix: test",
       "stopOnEntry": false,
       "terminal": "integrated",
       "env": {},

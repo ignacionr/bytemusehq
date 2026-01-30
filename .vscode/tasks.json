@@ -59,6 +59,25 @@
 				"nix: build"
 			],
 			"isBackground": true
+		},
+		{
+			"label": "nix: test",
+			"type": "shell",
+			"command": "nix develop -c bash -c 'cd build && ctest --output-on-failure'",
+			"group": {
+				"kind": "test",
+				"isDefault": true
+			},
+			"presentation": {
+				"reveal": "always",
+				"panel": "shared"
+			},
+			"dependsOn": [
+				"nix: build"
+			],
+			"problemMatcher": [
+				"$gcc"
+			]
 		}
 	]
 }

@@ -98,6 +98,50 @@ target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/s
 # Install rules
 install(TARGETS ${PROJECT_NAME} DESTINATION bin)
 
+# ============================================================================
+# Testing with Google Test
+# ============================================================================
+option(BUILD_TESTS "Build unit tests" ON)
+
+if(BUILD_TESTS)
+  enable_testing()
+  find_package(GTest REQUIRED)
+  include(GoogleTest)
+
+  # Test sources - add test files here
+  set(TEST_SOURCES
+      tests/test_main.cpp
+      tests/test_config.cpp
+  )
+
+  # Sources to test (excluding main.cpp)
+  set(TESTABLE_SOURCES
+      src/config/config.cpp
+      src/theme/theme.cpp
+      src/fs/fs.cpp
+  )
+
+  add_executable(bytemusehq_tests ${TEST_SOURCES} ${TESTABLE_SOURCES})
+
+  target_include_directories(bytemusehq_tests PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/src
+  )
+
+  target_link_libraries(bytemusehq_tests
+      GTest::gtest
+      GTest::gtest_main
+      glaze::glaze
+      ${wxWidgets_LIBRARIES}
+  )
+
+  # Platform-specific linking for tests
+  if(USE_CURL)
+    target_link_libraries(bytemusehq_tests CURL::libcurl)
+  endif()
+
+  gtest_discover_tests(bytemusehq_tests)
+endif()
+
 # CPack configuration for Windows installer
 if(WIN32)
   set(CPACK_GENERATOR NSIS)
