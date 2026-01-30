@@ -273,12 +273,21 @@ private:
     wxString ResolvePath(const wxString& path) {
         std::string sshPrefix = m_sshConfig.buildSshPrefix();
         
-        // Use bash to expand the path
-        std::string cmd = sshPrefix + " \"cd '" + path.ToStdString() + "' 2>/dev/null && pwd\" 2>&1";
-        
+        // If the path starts with '~', use remote expansion (tilde isn't expanded
+        // when placed inside single-quotes). Otherwise use cd to resolve the
+        // absolute path. This avoids treating '~' as a literal directory name.
+        std::string cmd;
+        if (!path.IsEmpty() && path[0] == '~') {
+            // Use eval to expand the tilde on the remote side
+            cmd = sshPrefix + " \"eval echo " + path.ToStdString() + "\" 2>/dev/null";
+        } else {
+            // Quote the path for safety when it doesn't need tilde expansion
+            cmd = sshPrefix + " \"cd '" + path.ToStdString() + "' 2>/dev/null && pwd\" 2>&1";
+        }
+
         FILE* pipe = popen(cmd.c_str(), "r");
         if (!pipe) return "";
-        
+
         std::string output;
         char buffer[4096];
         while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
