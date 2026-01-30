@@ -18,6 +18,7 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <signal.h>
+#include <errno.h>
 #endif
 
 namespace MCP {
@@ -438,9 +439,21 @@ private:
 #endif
         }
         
+        // Block SIGCHLD during popen/pclose to prevent signals from interfering with wxWidgets
+        // This is especially important on macOS where SIGCHLD can cause issues
+#ifndef _WIN32
+        sigset_t newmask, oldmask;
+        sigemptyset(&newmask);
+        sigaddset(&newmask, SIGCHLD);
+        pthread_sigmask(SIG_BLOCK, &newmask, &oldmask);
+#endif
+        
         // Execute using popen (thread-safe)
         FILE* pipe = popen(fullCommand.c_str(), "r");
         if (!pipe) {
+#ifndef _WIN32
+            pthread_sigmask(SIG_SETMASK, &oldmask, nullptr);
+#endif
             return {-1, "", "Failed to execute command: popen() failed"};
         }
         
@@ -457,6 +470,12 @@ private:
         
         // Get exit code
         int status = pclose(pipe);
+        
+#ifndef _WIN32
+        // Restore signal mask
+        pthread_sigmask(SIG_SETMASK, &oldmask, nullptr);
+#endif
+        
 #ifdef _WIN32
         exitCode = status;
 #else
