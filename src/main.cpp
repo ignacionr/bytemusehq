@@ -29,7 +29,7 @@ public:
         wxLog::SetVerbose(false);
         
         // Set log level to include debug messages
-        wxLog::SetLogLevel(wxLOG_Warning);
+        wxLog::SetLogLevel(wxLOG_Error);
         
         return true;
     }

@@ -301,6 +301,8 @@ private:
     std::vector<std::string> m_filesToIndex;
     size_t m_currentIndexFile = 0;
     bool m_indexingComplete = false;
+    wxTimer* m_indexTimeoutTimer = nullptr;
+    std::shared_ptr<std::atomic<bool>> m_currentRequestCompleted;
     
     // File extensions to index
     const std::set<wxString> m_sourceExtensions = {
@@ -331,6 +333,17 @@ private:
      */
     void InitializeLspClient() {
         m_lspClient = std::make_unique<LspClient>();
+        
+        // Set up log callback to see what's happening
+        m_lspClient->setLogCallback([this](const std::string& message) {
+            if (message.find("Progress") != std::string::npos ||
+                message.find("Unhandled") != std::string::npos) {
+                wxTheApp->CallAfter([this, message]() {
+                    // Extract just the key part for status
+                    ShowStatus(wxString::FromUTF8(message.substr(0, 50)));
+                });
+            }
+        });
         
         // Apply SSH configuration if enabled
         auto& config = Config::Instance();
@@ -518,9 +531,26 @@ private:
             std::string(content.mb_str())
         );
         
-        // Request symbols
-        m_lspClient->getDocumentSymbols(std::string(uri.mb_str()), [this, filePath, uri](const std::vector<LspDocumentSymbol>& symbols) {
+        wxLogMessage("LSP: Requesting symbols from %s", wxString::FromUTF8(filePath.c_str()));
+        
+        // Request symbols with timeout protection
+        m_currentRequestCompleted = std::make_shared<std::atomic<bool>>(false);
+        auto requestCompleted = m_currentRequestCompleted;
+        
+        m_lspClient->getDocumentSymbols(std::string(uri.mb_str()), [this, filePath, uri, requestCompleted](const std::vector<LspDocumentSymbol>& symbols) {
+            if (requestCompleted->exchange(true)) {
+                wxLogMessage("LSP: Callback fired but request already completed for %s", wxString::FromUTF8(filePath.c_str()));
+                return; // Already handled by timeout
+            }
+            
             wxTheApp->CallAfter([this, filePath, uri, symbols]() {
+                // Stop timeout timer
+                if (m_indexTimeoutTimer && m_indexTimeoutTimer->IsRunning()) {
+                    m_indexTimeoutTimer->Stop();
+                }
+                
+                wxLogMessage("LSP: Received %zu symbols from %s", symbols.size(), wxString::FromUTF8(filePath.c_str()));
+                
                 // Store symbols
                 CollectSymbols(filePath, symbols);
                 m_indexedFiles.insert(std::string(filePath.ToUTF8().data()));
@@ -533,6 +563,34 @@ private:
                 IndexNextFile();
             });
         });
+        
+        // Set a timeout in case clangd doesn't respond
+        if (!m_indexTimeoutTimer) {
+            m_indexTimeoutTimer = new wxTimer(m_panel);
+            m_panel->Bind(wxEVT_TIMER, [this](wxTimerEvent&) {
+                // Use member variable that was captured before timeout
+                auto requestCompleted = m_currentRequestCompleted;
+                if (!requestCompleted || requestCompleted->exchange(true)) {
+                    wxLogMessage("LSP: Timeout fired but request already completed");
+                    return;
+                }
+                
+                wxLogMessage("LSP: Timeout (5s) waiting for symbols, skipping file %zu/%zu", 
+                    m_currentIndexFile + 1, m_filesToIndex.size());
+                
+                // Close the current document
+                if (m_currentIndexFile < m_filesToIndex.size()) {
+                    wxString currentFilePath = m_filesToIndex[m_currentIndexFile];
+                    wxString currentUri = pathToUri(std::string(currentFilePath.mb_str()));
+                    m_lspClient->didClose(std::string(currentUri.mb_str()));
+                }
+                
+                // Continue to next file
+                m_currentIndexFile++;
+                IndexNextFile();
+            });
+        }
+        m_indexTimeoutTimer->StartOnce(5000); // 5 second timeout
     }
     
     /**

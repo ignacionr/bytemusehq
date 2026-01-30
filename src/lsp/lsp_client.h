@@ -10,6 +10,7 @@
 #include <thread>
 #include <mutex>
 #include <atomic>
+#include <condition_variable>
 #include <glaze/glaze.hpp>
 
 // Platform-specific includes for process management
@@ -20,6 +21,7 @@
 #include <sys/wait.h>
 #include <signal.h>
 #include <poll.h>
+#include <fcntl.h>
 #endif
 
 /**
@@ -261,8 +263,30 @@ public:
     
     bool writeStdin(const char* data, size_t size) override {
         if (m_stdin_fd < 0) return false;
-        ssize_t written = write(m_stdin_fd, data, size);
-        return written == static_cast<ssize_t>(size);
+        
+        size_t total_written = 0;
+        int retries = 0;
+        const int max_retries = 100; // Max ~100ms of retries
+        
+        while (total_written < size) {
+            ssize_t written = write(m_stdin_fd, data + total_written, size - total_written);
+            if (written < 0) {
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    // Non-blocking write would block
+                    retries++;
+                    if (retries >= max_retries) {
+                        // Give up after max retries to prevent UI freeze
+                        return false;
+                    }
+                    usleep(1000); // 1ms
+                    continue;
+                }
+                return false; // Real error
+            }
+            total_written += written;
+            retries = 0; // Reset retry counter on successful write
+        }
+        return true;
     }
 };
 #endif
@@ -281,8 +305,12 @@ private:
     LspSshConfig m_sshConfig;
     
     std::thread m_readerThread;
+    std::thread m_writerThread;
     std::mutex m_mutex;
+    std::mutex m_writeMutex;
     std::string m_inputBuffer;
+    std::queue<std::string> m_writeQueue;
+    std::condition_variable m_writeCondition;
     
     std::map<int, std::function<void(const glz::generic&)>> m_pendingRequests;
     DiagnosticsCallback m_diagnosticsCallback;
@@ -364,6 +392,10 @@ public:
         close(stdout_pipe[1]);
         close(stderr_pipe[1]);
         
+        // Make stdin non-blocking to prevent UI freezes when writing large messages
+        int flags = fcntl(stdin_pipe[1], F_GETFL, 0);
+        fcntl(stdin_pipe[1], F_SETFL, flags | O_NONBLOCK);
+        
         m_process = std::make_unique<UnixProcessHandle>(
             pid, stdin_pipe[1], stdout_pipe[0], stderr_pipe[0]
         );
@@ -375,6 +407,7 @@ public:
         
         m_running = true;
         m_readerThread = std::thread(&LspClient::readerThreadFunc, this);
+        m_writerThread = std::thread(&LspClient::writerThreadFunc, this);
         
         return true;
     }
@@ -386,10 +419,16 @@ public:
         
         if (m_initialized) {
             sendRequest("shutdown", glz::generic{});
-            sendNotification("exit", glz::generic{});
         }
         
         m_running = false;
+        
+        // Wake up writer thread
+        m_writeCondition.notify_one();
+        
+        if (m_writerThread.joinable()) {
+            m_writerThread.join();
+        }
         
         if (m_readerThread.joinable()) {
             m_readerThread.join();
@@ -556,6 +595,26 @@ public:
         m_diagnosticsCallback = callback;
     }
     
+    /**
+     * Send a custom LSP request with a callback.
+     * Useful for debugging and querying clangd status.
+     */
+    void sendCustomRequest(const std::string& method, const glz::generic& params,
+                          std::function<void(const glz::generic&)> callback) {
+        int id = m_nextId++;
+        
+        glz::generic msg;
+        msg["jsonrpc"] = "2.0";
+        msg["id"] = id;
+        msg["method"] = method;
+        msg["params"] = params;
+        
+        sendMessage(msg);
+        
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_pendingRequests[id] = callback;
+    }
+    
 private:
     void log(const std::string& message) {
         if (m_logCallback) {
@@ -585,15 +644,38 @@ private:
         sendMessage(msg);
     }
     
+    void writerThreadFunc() {
+        while (m_running || !m_writeQueue.empty()) {
+            std::unique_lock<std::mutex> lock(m_writeMutex);
+            m_writeCondition.wait_for(lock, std::chrono::milliseconds(100), [this] {
+                return !m_writeQueue.empty() || !m_running;
+            });
+            
+            if (m_writeQueue.empty()) continue;
+            
+            std::string message = m_writeQueue.front();
+            m_writeQueue.pop();
+            lock.unlock();
+            
+            // Write to clangd (this may block but it's in background thread)
+            if (m_process && !m_process->writeStdin(message.c_str(), message.size())) {
+                log("Failed to write to LSP server stdin");
+            }
+        }
+    }
+    
     void sendMessage(const glz::generic& msg) {
         if (!m_process) return;
         
         std::string content = glz::write_json(msg).value_or("{}");
         std::string message = "Content-Length: " + std::to_string(content.size()) + "\r\n\r\n" + content;
         
-        if (!m_process->writeStdin(message.c_str(), message.size())) {
-            log("Failed to write to LSP server stdin");
+        // Queue the message for the writer thread to send
+        {
+            std::lock_guard<std::mutex> lock(m_writeMutex);
+            m_writeQueue.push(message);
         }
+        m_writeCondition.notify_one();
     }
     
     void readerThreadFunc() {
@@ -661,8 +743,38 @@ private:
             }
         } else if (msg.contains("method")) {
             std::string method = msg["method"].get<std::string>();
-            if (method == "textDocument/publishDiagnostics" && m_diagnosticsCallback) {
-                handleDiagnostics(msg["params"]);
+            if (method == "textDocument/publishDiagnostics") {
+                if (m_diagnosticsCallback) {
+                    handleDiagnostics(msg["params"]);
+                }
+                // Always consume this notification even without callback
+            } else if (method == "$/progress") {
+                // Background indexing progress notification
+                if (msg.contains("params")) {
+                    std::string progressJson = glz::write_json(msg["params"]).value_or("{}");
+                    log("Progress: " + progressJson);
+                }
+            } else if (method == "window/logMessage") {
+                // Log message from server
+                if (msg.contains("params") && msg["params"].is_object()) {
+                    auto& params = msg["params"];
+                    if (params.contains("message")) {
+                        log("Server: " + params["message"].get<std::string>());
+                    }
+                }
+            } else if (method == "window/showMessage") {
+                // Status message from server
+                if (msg.contains("params") && msg["params"].is_object()) {
+                    auto& params = msg["params"];
+                    if (params.contains("message")) {
+                        log("Status: " + params["message"].get<std::string>());
+                    }
+                }
+            } else if (method.find("$/") == 0) {
+                // Silently ignore other $ prefixed notifications (internal protocol extensions)
+            } else {
+                // Log truly unexpected notifications for debugging
+                log("Unhandled notification: " + method);
             }
         }
     }
