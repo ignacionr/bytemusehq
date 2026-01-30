@@ -19,6 +19,8 @@
 #include <wx/base64.h>
 #include <wx/uri.h>
 
+#include <glaze/glaze.hpp>
+
 #include <thread>
 #include <mutex>
 #include <atomic>
@@ -27,6 +29,54 @@
 class MainFrame;
 
 namespace BuiltinWidgets {
+
+/**
+ * JIRA API response structures for Glaze JSON parsing.
+ * These map to the JIRA REST API v2/v3 response format.
+ */
+namespace JiraApi {
+    struct NamedField {
+        std::string name;
+    };
+    
+    struct User {
+        std::string displayName;
+        std::string accountId;  // API v3
+        std::string key;        // API v2 (legacy)
+    };
+    
+    struct IssueFields {
+        std::string summary;
+        std::string updated;
+        std::optional<NamedField> status;
+        std::optional<NamedField> priority;
+        std::optional<NamedField> issuetype;
+        std::optional<User> assignee;
+    };
+    
+    struct Issue {
+        std::string id;
+        std::string key;
+        IssueFields fields;
+    };
+    
+    struct SearchResponse {
+        int total = 0;
+        int maxResults = 0;
+        std::vector<Issue> issues;
+    };
+    
+    struct ErrorResponse {
+        std::vector<std::string> errorMessages;
+        std::string message;  // Single error message (used by some endpoints)
+    };
+    
+    struct CreateIssueResponse {
+        std::string id;
+        std::string key;
+        std::string self;
+    };
+} // namespace JiraApi
 
 /**
  * JIRA issue structure for display.
@@ -643,21 +693,18 @@ private:
                 return wxString::Format("JIRA server error (%ld)\n\nPlease try again later.", httpCode);
             default:
                 if (httpCode >= 400) {
-                    // Try to extract error message from response
-                    wxString msg = ExtractJsonString(response, "message");
-                    if (msg.IsEmpty()) {
-                        // Try errorMessages array
-                        size_t errPos = response.find("\"errorMessages\"");
-                        if (errPos != std::string::npos) {
-                            size_t start = response.find('"', errPos + 20);
-                            size_t end = response.find('"', start + 1);
-                            if (start != std::string::npos && end != std::string::npos) {
-                                msg = wxString::FromUTF8(response.substr(start + 1, end - start - 1).c_str());
-                            }
+                    // Try to extract error message from response using Glaze
+                    JiraApi::ErrorResponse errResp;
+                    auto ec = glz::read<glz::opts{.error_on_unknown_keys = false}>(errResp, response);
+                    if (!ec) {
+                        if (!errResp.message.empty()) {
+                            return wxString::Format("Error (%ld): %s", httpCode, 
+                                wxString::FromUTF8(errResp.message.c_str()));
                         }
-                    }
-                    if (!msg.IsEmpty()) {
-                        return wxString::Format("Error (%ld): %s", httpCode, msg);
+                        if (!errResp.errorMessages.empty()) {
+                            return wxString::Format("Error (%ld): %s", httpCode, 
+                                wxString::FromUTF8(errResp.errorMessages[0].c_str()));
+                        }
                     }
                     return wxString::Format("HTTP Error %ld", httpCode);
                 }
@@ -665,105 +712,46 @@ private:
         }
     }
     
-    // Simple JSON string extraction (avoid heavy JSON library dependency)
-    wxString ExtractJsonString(const std::string& json, const wxString& key) {
-        std::string searchKey = "\"" + std::string(key.ToUTF8().data()) + "\"";
-        size_t keyPos = json.find(searchKey);
-        if (keyPos == std::string::npos) return "";
-        
-        size_t colonPos = json.find(':', keyPos);
-        if (colonPos == std::string::npos) return "";
-        
-        size_t start = json.find('"', colonPos + 1);
-        if (start == std::string::npos) return "";
-        
-        size_t end = start + 1;
-        while (end < json.length() && (json[end] != '"' || json[end-1] == '\\')) {
-            end++;
-        }
-        
-        return wxString::FromUTF8(json.substr(start + 1, end - start - 1).c_str());
-    }
-    
-    // Parse JIRA API response into issues
+    // Parse JIRA API response into issues using Glaze
     std::vector<JiraIssue> ParseJiraResponse(const std::string& json) {
         std::vector<JiraIssue> issues;
         
-        // Find "issues" array
-        size_t issuesStart = json.find("\"issues\"");
-        if (issuesStart == std::string::npos) return issues;
+        JiraApi::SearchResponse searchResp;
+        // Use error_on_unknown_keys=false since JIRA returns many fields we don't need
+        auto ec = glz::read<glz::opts{.error_on_unknown_keys = false}>(searchResp, json);
+        if (ec) {
+            wxLogError("Failed to parse JIRA response: %s", 
+                wxString::FromUTF8(glz::format_error(ec, json).c_str()));
+            return issues;
+        }
         
-        size_t arrayStart = json.find('[', issuesStart);
-        if (arrayStart == std::string::npos) return issues;
-        
-        // Parse each issue object
-        size_t pos = arrayStart;
-        int braceCount = 0;
-        size_t issueStart = 0;
-        
-        while (pos < json.length()) {
-            if (json[pos] == '{') {
-                if (braceCount == 1) issueStart = pos;
-                braceCount++;
-            } else if (json[pos] == '}') {
-                braceCount--;
-                if (braceCount == 1) {
-                    // Extract this issue
-                    std::string issueJson = json.substr(issueStart, pos - issueStart + 1);
-                    
-                    JiraIssue issue;
-                    issue.key = ExtractJsonString(issueJson, "key");
-                    issue.summary = ExtractJsonString(issueJson, "summary");
-                    
-                    // Extract nested fields
-                    size_t statusPos = issueJson.find("\"status\"");
-                    if (statusPos != std::string::npos) {
-                        size_t namePos = issueJson.find("\"name\"", statusPos);
-                        if (namePos != std::string::npos && namePos < statusPos + 200) {
-                            issue.status = ExtractJsonString(issueJson.substr(statusPos, 200), "name");
-                        }
-                    }
-                    
-                    size_t priorityPos = issueJson.find("\"priority\"");
-                    if (priorityPos != std::string::npos) {
-                        size_t namePos = issueJson.find("\"name\"", priorityPos);
-                        if (namePos != std::string::npos && namePos < priorityPos + 200) {
-                            issue.priority = ExtractJsonString(issueJson.substr(priorityPos, 200), "name");
-                        }
-                    }
-                    
-                    size_t typePos = issueJson.find("\"issuetype\"");
-                    if (typePos != std::string::npos) {
-                        size_t namePos = issueJson.find("\"name\"", typePos);
-                        if (namePos != std::string::npos && namePos < typePos + 200) {
-                            issue.type = ExtractJsonString(issueJson.substr(typePos, 200), "name");
-                        }
-                    }
-                    
-                    size_t assigneePos = issueJson.find("\"assignee\"");
-                    if (assigneePos != std::string::npos) {
-                        size_t displayPos = issueJson.find("\"displayName\"", assigneePos);
-                        if (displayPos != std::string::npos && displayPos < assigneePos + 300) {
-                            issue.assignee = ExtractJsonString(issueJson.substr(assigneePos, 300), "displayName");
-                        }
-                    }
-                    
-                    // Parse updated time
-                    wxString updated = ExtractJsonString(issueJson, "updated");
-                    if (!updated.IsEmpty()) {
-                        issue.updated = FormatRelativeTime(updated);
-                    }
-                    
-                    issue.url = m_jiraUrl + "/browse/" + issue.key;
-                    
-                    if (!issue.key.IsEmpty()) {
-                        issues.push_back(issue);
-                    }
-                }
-            } else if (json[pos] == ']' && braceCount == 1) {
-                break;
+        for (const auto& apiIssue : searchResp.issues) {
+            JiraIssue issue;
+            issue.key = wxString::FromUTF8(apiIssue.key.c_str());
+            issue.summary = wxString::FromUTF8(apiIssue.fields.summary.c_str());
+            
+            if (apiIssue.fields.status) {
+                issue.status = wxString::FromUTF8(apiIssue.fields.status->name.c_str());
             }
-            pos++;
+            if (apiIssue.fields.priority) {
+                issue.priority = wxString::FromUTF8(apiIssue.fields.priority->name.c_str());
+            }
+            if (apiIssue.fields.issuetype) {
+                issue.type = wxString::FromUTF8(apiIssue.fields.issuetype->name.c_str());
+            }
+            if (apiIssue.fields.assignee) {
+                issue.assignee = wxString::FromUTF8(apiIssue.fields.assignee->displayName.c_str());
+            }
+            
+            if (!apiIssue.fields.updated.empty()) {
+                issue.updated = FormatRelativeTime(wxString::FromUTF8(apiIssue.fields.updated.c_str()));
+            }
+            
+            issue.url = m_jiraUrl + "/browse/" + issue.key;
+            
+            if (!issue.key.IsEmpty()) {
+                issues.push_back(issue);
+            }
         }
         
         return issues;
@@ -852,18 +840,24 @@ private:
         // Fetch in background thread
         std::thread([this]() {
             // JQL to get issues assigned to current user
-            // API v2 (Jira Server): /rest/api/2/search?jql=...
-            // API v3 (Jira Cloud):  /rest/api/3/search/jql?jql=...
-            wxString endpoint;
-            if (m_jiraApiVersion == "3") {
-                endpoint = "/rest/api/3/search/jql?jql=assignee%3DcurrentUser()%20ORDER%20BY%20updated%20DESC"
-                    "&fields=key,summary,status,priority,issuetype,assignee,updated&maxResults=50";
-            } else {
-                endpoint = "/rest/api/2/search?jql=assignee%3DcurrentUser()%20ORDER%20BY%20updated%20DESC"
-                    "&fields=key,summary,status,priority,issuetype,assignee,updated&maxResults=50";
-            }
+            // API v2 (Jira Server): GET /rest/api/2/search?jql=...
+            // API v3 (Jira Cloud):  POST /rest/api/3/search/jql with JSON body
+            JiraApiResult result;
             
-            JiraApiResult result = MakeJiraRequest(endpoint);
+            if (m_jiraApiVersion == "3") {
+                // API v3 uses POST with JSON body
+                wxString jsonBody = R"({
+                    "jql": "assignee=currentUser() ORDER BY updated DESC",
+                    "fields": ["key", "summary", "status", "priority", "issuetype", "assignee", "updated"],
+                    "maxResults": 50
+                })";
+                result = MakeJiraRequest("/rest/api/3/search/jql", "POST", jsonBody);
+            } else {
+                // API v2 uses GET with query params
+                wxString endpoint = "/rest/api/2/search?jql=assignee%3DcurrentUser()%20ORDER%20BY%20updated%20DESC"
+                    "&fields=key,summary,status,priority,issuetype,assignee,updated&maxResults=50";
+                result = MakeJiraRequest(endpoint);
+            }
             
             std::vector<JiraIssue> issues;
             wxString errorMsg;
@@ -1016,10 +1010,15 @@ private:
                 errorMsg = result.error;
             } else if (!result.success) {
                 errorMsg = GetHttpErrorMessage(result.httpCode, result.response);
-            } else if (result.response.find("\"key\"") != std::string::npos) {
-                newKey = ExtractJsonString(result.response, "key");
             } else {
-                errorMsg = "Unexpected response from JIRA API";
+                // Parse create response using Glaze
+                JiraApi::CreateIssueResponse createResp;
+                auto ec = glz::read<glz::opts{.error_on_unknown_keys = false}>(createResp, result.response);
+                if (!ec && !createResp.key.empty()) {
+                    newKey = wxString::FromUTF8(createResp.key.c_str());
+                } else {
+                    errorMsg = "Unexpected response from JIRA API";
+                }
             }
             
             wxTheApp->CallAfter([this, newKey, errorMsg, summary]() {

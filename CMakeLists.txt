@@ -14,6 +14,10 @@ set(wxWidgets_USE_STATIC ON)
 find_package(wxWidgets REQUIRED core base stc)
 include(${wxWidgets_USE_FILE})
 
+# JSON library - glaze (header-only)
+find_package(glaze REQUIRED)
+message(STATUS "Glaze found - using Glaze for JSON parsing")
+
 # HTTP client configuration
 # On Windows, use WinHTTP (built-in). On other platforms, use CURL.
 if(WIN32)
@@ -61,6 +65,9 @@ add_executable(${PROJECT_NAME} WIN32 ${SOURCES} ${HEADERS})
 
 # Link wxWidgets libraries
 target_link_libraries(${PROJECT_NAME} ${wxWidgets_LIBRARIES})
+
+# Link JSON library
+target_link_libraries(${PROJECT_NAME} glaze::glaze)
 
 # Link HTTP backend
 if(USE_CURL)
