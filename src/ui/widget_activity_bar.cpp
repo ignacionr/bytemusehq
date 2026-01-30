@@ -100,7 +100,7 @@ void ActivityBarButton::OnPaint(wxPaintEvent& event)
     
     // Badge (if any)
     if (m_badgeCount > 0) {
-        wxString badgeText = m_badgeCount > 99 ? "99+" : wxString::Format("%d", m_badgeCount);
+        wxString badgeText = m_badgeCount > 99 ? wxString("99+") : wxString::Format("%d", m_badgeCount);
         wxFont badgeFont(8, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_BOLD);
         dc.SetFont(badgeFont);
         

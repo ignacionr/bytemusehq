@@ -16,7 +16,7 @@ namespace AI {
 namespace GeminiApi {
     struct FunctionCall {
         std::string name;
-        std::map<std::string, glz::generic> args;
+        std::map<std::string, std::string> args;
     };
 
     struct Part {
