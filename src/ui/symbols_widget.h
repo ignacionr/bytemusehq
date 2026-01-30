@@ -148,7 +148,7 @@ public:
 
     void OnShow(wxWindow* window, WidgetContext& context) override {
         // Trigger indexing if not already done
-        if (m_allSymbols.empty() && m_lspClient && m_lspClient->IsInitialized()) {
+        if (m_allSymbols.empty() && m_lspClient && m_lspClient->isInitialized()) {
             StartIndexing();
         }
     }
@@ -338,7 +338,7 @@ private:
         wxString workspaceRoot = m_workspaceRoot;
         
         if (sshEnabled) {
-            m_lspClient->SetSshConfig(LoadLspSshConfig());
+            m_lspClient->setSshConfig(LoadLspSshConfig());
             // Use remote path as workspace root
             workspaceRoot = config.GetString("ssh.remotePath", "~");
         }
@@ -359,12 +359,12 @@ private:
             : "Starting clangd...";
         ShowStatus(statusMsg);
         
-        if (!m_lspClient->Start(clangdCommand, workspaceRoot)) {
+        if (!m_lspClient->start(std::string(clangdCommand.mb_str()), std::string(workspaceRoot.mb_str()))) {
             ShowStatus(sshEnabled ? "Failed to start remote clangd" : "Failed to start clangd");
             return;
         }
         
-        m_lspClient->Initialize([this](bool success) {
+        m_lspClient->initialize([this](bool success) {
             wxTheApp->CallAfter([this, success]() {
                 if (success) {
                     ShowStatus("LSP ready, scanning...");
@@ -491,7 +491,7 @@ private:
         }
         
         wxString filePath = m_filesToIndex[m_currentIndexFile];
-        wxString uri = PathToUri(filePath);
+        wxString uri = pathToUri(std::string(filePath.mb_str()));
         
         // Update status
         wxString fileName = wxFileName(filePath).GetFullName();
@@ -512,17 +512,21 @@ private:
         
         // Notify LSP about the file
         wxString langId = DetectLanguage(filePath);
-        m_lspClient->DidOpen(uri, langId, content);
+        m_lspClient->didOpen(
+            std::string(uri.mb_str()),
+            std::string(langId.mb_str()),
+            std::string(content.mb_str())
+        );
         
         // Request symbols
-        m_lspClient->GetDocumentSymbols(uri, [this, filePath, uri](const std::vector<LspDocumentSymbol>& symbols) {
+        m_lspClient->getDocumentSymbols(std::string(uri.mb_str()), [this, filePath, uri](const std::vector<LspDocumentSymbol>& symbols) {
             wxTheApp->CallAfter([this, filePath, uri, symbols]() {
                 // Store symbols
                 CollectSymbols(filePath, symbols);
                 m_indexedFiles.insert(std::string(filePath.ToUTF8().data()));
                 
                 // Close the document to free LSP memory
-                m_lspClient->DidClose(uri);
+                m_lspClient->didClose(std::string(uri.mb_str()));
                 
                 // Continue to next file
                 m_currentIndexFile++;
@@ -584,7 +588,7 @@ private:
                 -1, -1, new SymbolData(filePath));
             
             for (const auto* symbol : symbols) {
-                wxString icon = GetSymbolKindIcon(symbol->kind);
+                wxString icon = getSymbolKindIcon(symbol->kind);
                 wxString label = icon + " " + symbol->name;
                 if (!symbol->detail.empty()) {
                     label += " : " + symbol->detail;

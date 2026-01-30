@@ -1,37 +1,42 @@
 #ifndef LSP_CLIENT_H
 #define LSP_CLIENT_H
 
-#include <wx/wx.h>
-#include <wx/process.h>
-#include <wx/txtstrm.h>
 #include <functional>
 #include <map>
 #include <queue>
 #include <memory>
-#include <sstream>
-// Use Glaze for JSON parsing instead of ad-hoc parser
+#include <string>
+#include <vector>
+#include <thread>
+#include <mutex>
+#include <atomic>
 #include <glaze/glaze.hpp>
 
-using JsonValue = glz::generic;
+// Platform-specific includes for process management
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <unistd.h>
+#include <sys/wait.h>
+#include <signal.h>
+#include <poll.h>
+#endif
 
 /**
  * LSP (Language Server Protocol) client for ByteMuseHQ.
  * 
- * Communicates with language servers (e.g., clangd) via JSON-RPC over stdin/stdout.
- * Provides code intelligence features like go-to-definition, find references,
- * document symbols, and diagnostics.
+ * Platform-independent implementation that communicates with language servers
+ * via JSON-RPC over stdin/stdout. Provides code intelligence features like
+ * go-to-definition, find references, document symbols, and diagnostics.
  */
-
-// Forward declarations
-class LspClient;
 
 // ============================================================================
 // LSP Data Types
 // ============================================================================
 
 struct LspPosition {
-    int line = 0;      // 0-based line number
-    int character = 0; // 0-based character offset
+    int line = 0;
+    int character = 0;
 };
 
 struct LspRange {
@@ -44,35 +49,14 @@ struct LspLocation {
     LspRange range;
 };
 
-// Glaze metadata for LSP types (used for parsing with glaze::read)
-// Move these to global namespace at the end of the file
 enum class LspSymbolKind {
-    File = 1,
-    Module = 2,
-    Namespace = 3,
-    Package = 4,
-    Class = 5,
-    Method = 6,
-    Property = 7,
-    Field = 8,
-    Constructor = 9,
-    Enum = 10,
-    Interface = 11,
-    Function = 12,
-    Variable = 13,
-    Constant = 14,
-    String = 15,
-    Number = 16,
-    Boolean = 17,
-    Array = 18,
-    Object = 19,
-    Key = 20,
-    Null = 21,
-    EnumMember = 22,
-    Struct = 23,
-    Event = 24,
-    Operator = 25,
-    TypeParameter = 26
+    File = 1, Module = 2, Namespace = 3, Package = 4,
+    Class = 5, Method = 6, Property = 7, Field = 8,
+    Constructor = 9, Enum = 10, Interface = 11, Function = 12,
+    Variable = 13, Constant = 14, String = 15, Number = 16,
+    Boolean = 17, Array = 18, Object = 19, Key = 20,
+    Null = 21, EnumMember = 22, Struct = 23, Event = 24,
+    Operator = 25, TypeParameter = 26
 };
 
 struct LspDocumentSymbol {
@@ -92,8 +76,6 @@ struct LspDiagnostic {
     std::string message;
 };
 
-
-
 struct LspCompletionItem {
     std::string label;
     int kind;
@@ -102,6 +84,7 @@ struct LspCompletionItem {
     std::string insertText;
 };
 
+// Glaze metadata for serialization/deserialization
 template<> struct glz::meta<LspPosition> {
     using T = LspPosition;
     static constexpr auto value = object("line", &T::line, "character", &T::character);
@@ -119,119 +102,37 @@ template<> struct glz::meta<LspLocation> {
 
 template<> struct glz::meta<LspDocumentSymbol> {
     using T = LspDocumentSymbol;
-    static constexpr auto value = object("name", &T::name, "detail", &T::detail, "kind", &T::kind, "range", &T::range, "selectionRange", &T::selectionRange, "children", &T::children);
+    static constexpr auto value = object(
+        "name", &T::name,
+        "detail", &T::detail,
+        "kind", &T::kind,
+        "range", &T::range,
+        "selectionRange", &T::selectionRange,
+        "children", &T::children
+    );
 };
 
 template<> struct glz::meta<LspDiagnostic> {
     using T = LspDiagnostic;
-    static constexpr auto value = object("range", &T::range, "severity", &T::severity, "code", &T::code, "source", &T::source, "message", &T::message);
+    static constexpr auto value = object(
+        "range", &T::range,
+        "severity", &T::severity,
+        "code", &T::code,
+        "source", &T::source,
+        "message", &T::message
+    );
 };
 
 template<> struct glz::meta<LspCompletionItem> {
     using T = LspCompletionItem;
-    static constexpr auto value = object("label", &T::label, "kind", &T::kind, "detail", &T::detail, "documentation", &T::documentation, "insertText", &T::insertText);
+    static constexpr auto value = object(
+        "label", &T::label,
+        "kind", &T::kind,
+        "detail", &T::detail,
+        "documentation", &T::documentation,
+        "insertText", &T::insertText
+    );
 };
-
-// Glaze-friendly mirror types using std::string where needed
-struct GzDiagnostic {
-    LspRange range;
-    int severity;
-    std::string code;
-    std::string source;
-    std::string message;
-};
-
-template<> struct glz::meta<GzDiagnostic> {
-    using T = GzDiagnostic;
-    static constexpr auto value = object("range", &T::range, "severity", &T::severity, "code", &T::code, "source", &T::source, "message", &T::message);
-};
-
-struct DiagnosticsParams {
-    std::string uri;
-    std::vector<GzDiagnostic> diagnostics;
-};
-
-template<> struct glz::meta<DiagnosticsParams> {
-    using T = DiagnosticsParams;
-    static constexpr auto value = object("uri", &T::uri, "diagnostics", &T::diagnostics);
-};
-
-
-struct GzDocumentSymbol {
-    std::string name;
-    std::string detail;
-    int kind;
-    LspRange range;
-    LspRange selectionRange;
-    std::vector<GzDocumentSymbol> children;
-};
-
-template<> struct glz::meta<GzDocumentSymbol> {
-    using T = GzDocumentSymbol;
-    static constexpr auto value = object("name", &T::name, "detail", &T::detail, "kind", &T::kind, "range", &T::range, "selectionRange", &T::selectionRange, "children", &T::children);
-};
-
-struct GzLocation {
-    std::string uri;
-    LspRange range;
-};
-
-template<> struct glz::meta<GzLocation> {
-    using T = GzLocation;
-    static constexpr auto value = object("uri", &T::uri, "range", &T::range);
-};
-
-struct GzCompletionItem {
-    std::string label;
-    int kind;
-    std::string detail;
-    std::string documentation;
-    std::string insertText;
-};
-
-template<> struct glz::meta<GzCompletionItem> {
-    using T = GzCompletionItem;
-    static constexpr auto value = object("label", &T::label, "kind", &T::kind, "detail", &T::detail, "documentation", &T::documentation, "insertText", &T::insertText);
-};
-
-// Helper converters from Gz* to LSP types
-static LspDiagnostic fromGzDiagnostic(const GzDiagnostic& g) {
-    LspDiagnostic d;
-    d.severity = g.severity;
-    d.code = g.code;
-    d.source = g.source;
-    d.message = g.message;
-    d.range = g.range;
-    return d;
-}
-
-static LspDocumentSymbol fromGzDocumentSymbol(const GzDocumentSymbol& g) {
-    LspDocumentSymbol s;
-    s.name = g.name;
-    s.detail = g.detail;
-    s.kind = static_cast<LspSymbolKind>(g.kind);
-    s.range = g.range;
-    s.selectionRange = g.selectionRange;
-    for (const auto& c : g.children) s.children.push_back(fromGzDocumentSymbol(c));
-    return s;
-}
-
-static LspLocation fromGzLocation(const GzLocation& g) {
-    LspLocation l;
-    l.uri = g.uri;
-    l.range = g.range;
-    return l;
-}
-
-static LspCompletionItem fromGzCompletionItem(const GzCompletionItem& g) {
-    LspCompletionItem i;
-    i.label = g.label;
-    i.kind = g.kind;
-    i.detail = g.detail;
-    i.documentation = g.documentation;
-    i.insertText = g.insertText;
-    return i;
-}
 
 // ============================================================================
 // Callbacks
@@ -242,15 +143,12 @@ using SymbolsCallback = std::function<void(const std::vector<LspDocumentSymbol>&
 using LocationCallback = std::function<void(const std::vector<LspLocation>& locations)>;
 using DiagnosticsCallback = std::function<void(const std::string& uri, const std::vector<LspDiagnostic>& diagnostics)>;
 using CompletionCallback = std::function<void(const std::vector<LspCompletionItem>& items)>;
+using LogCallback = std::function<void(const std::string& message)>;
 
 // ============================================================================
-// SSH Configuration for Remote LSP
+// SSH Configuration
 // ============================================================================
 
-/**
- * SSH configuration for running language servers on remote machines.
- * When enabled, the LSP client will run the language server via SSH.
- */
 struct LspSshConfig {
     bool enabled = false;
     std::string host;
@@ -260,16 +158,10 @@ struct LspSshConfig {
     std::string extraOptions;
     int connectionTimeout = 30;
     
-    /**
-     * Build SSH command prefix for running remote LSP server.
-     */
     std::string buildSshPrefix() const {
         if (!enabled || host.empty()) return "";
         
-        std::string cmd = "ssh";
-        
-        // Use -tt for pseudo-terminal allocation (needed for stdin/stdout)
-        cmd += " -tt";
+        std::string cmd = "ssh -tt";
         
         if (!extraOptions.empty()) {
             cmd += " " + extraOptions;
@@ -301,558 +193,493 @@ struct LspSshConfig {
 };
 
 // ============================================================================
-// JSON Helper (minimal implementation)
+// Process Handle (Platform-independent wrapper)
 // ============================================================================
 
-/**
- * Minimal JSON builder for LSP messages.
- * For a production implementation, consider using nlohmann/json or rapidjson.
- */
+class ProcessHandle {
+public:
+    virtual ~ProcessHandle() = default;
+    virtual bool isRunning() const = 0;
+    virtual void terminate() = 0;
+    virtual int readStdout(char* buffer, size_t size) = 0;
+    virtual int readStderr(char* buffer, size_t size) = 0;
+    virtual bool writeStdin(const char* data, size_t size) = 0;
+};
+
+#ifndef _WIN32
+class UnixProcessHandle : public ProcessHandle {
+private:
+    pid_t m_pid;
+    int m_stdin_fd;
+    int m_stdout_fd;
+    int m_stderr_fd;
+    
+public:
+    UnixProcessHandle(pid_t pid, int stdin_fd, int stdout_fd, int stderr_fd)
+        : m_pid(pid), m_stdin_fd(stdin_fd), m_stdout_fd(stdout_fd), m_stderr_fd(stderr_fd) {}
+    
+    ~UnixProcessHandle() override {
+        terminate();
+        if (m_stdin_fd >= 0) close(m_stdin_fd);
+        if (m_stdout_fd >= 0) close(m_stdout_fd);
+        if (m_stderr_fd >= 0) close(m_stderr_fd);
+    }
+    
+    bool isRunning() const override {
+        int status;
+        pid_t result = waitpid(m_pid, &status, WNOHANG);
+        return result == 0;
+    }
+    
+    void terminate() override {
+        if (m_pid > 0) {
+            kill(m_pid, SIGTERM);
+            m_pid = -1;
+        }
+    }
+    
+    int readStdout(char* buffer, size_t size) override {
+        if (m_stdout_fd < 0) return -1;
+        
+        // Non-blocking read
+        pollfd pfd = {m_stdout_fd, POLLIN, 0};
+        int ret = poll(&pfd, 1, 0);
+        if (ret <= 0) return 0;
+        
+        return read(m_stdout_fd, buffer, size);
+    }
+    
+    int readStderr(char* buffer, size_t size) override {
+        if (m_stderr_fd < 0) return -1;
+        
+        pollfd pfd = {m_stderr_fd, POLLIN, 0};
+        int ret = poll(&pfd, 1, 0);
+        if (ret <= 0) return 0;
+        
+        return read(m_stderr_fd, buffer, size);
+    }
+    
+    bool writeStdin(const char* data, size_t size) override {
+        if (m_stdin_fd < 0) return false;
+        ssize_t written = write(m_stdin_fd, data, size);
+        return written == static_cast<ssize_t>(size);
+    }
+};
+#endif
 
 // ============================================================================
 // LSP Client
 // ============================================================================
 
-/**
- * Client for communicating with Language Server Protocol servers.
- * Supports both local and remote (SSH) language server execution.
- * 
- * Usage:
- * @code
- * LspClient client;
- * client.SetDiagnosticsCallback([](const wxString& uri, const auto& diags) {
- *     // Handle diagnostics
- * });
- * 
- * // For local development:
- * if (client.Start("clangd", "/path/to/project")) { ... }
- * 
- * // For remote development via SSH:
- * LspSshConfig ssh;
- * ssh.enabled = true;
- * ssh.host = "dev-machine";
- * ssh.user = "developer";
- * client.SetSshConfig(ssh);
- * if (client.Start("clangd", "/home/developer/project")) { ... }
- * @endcode
- */
-class LspClient : public wxEvtHandler {
+class LspClient {
 private:
-    wxProcess* m_process = nullptr;
-    wxTimer m_pollTimer;
-    wxString m_workspaceRoot;
+    std::unique_ptr<ProcessHandle> m_process;
+    std::string m_workspaceRoot;
     int m_nextId = 1;
-    bool m_initialized = false;
+    std::atomic<bool> m_initialized{false};
+    std::atomic<bool> m_running{false};
     LspSshConfig m_sshConfig;
+    
+    std::thread m_readerThread;
+    std::mutex m_mutex;
+    std::string m_inputBuffer;
+    
+    std::map<int, std::function<void(const glz::generic&)>> m_pendingRequests;
+    DiagnosticsCallback m_diagnosticsCallback;
+    LogCallback m_logCallback;
     
 public:
     LspClient() = default;
     
     ~LspClient() {
-        Stop();
+        stop();
     }
     
-    /**
-     * Configure SSH for remote language server execution.
-     */
-    void SetSshConfig(const LspSshConfig& config) {
+    void setLogCallback(LogCallback callback) {
+        m_logCallback = callback;
+    }
+    
+    void setSshConfig(const LspSshConfig& config) {
         m_sshConfig = config;
     }
     
-    /**
-     * Get current SSH configuration.
-     */
-    LspSshConfig GetSshConfig() const {
+    LspSshConfig getSshConfig() const {
         return m_sshConfig;
     }
     
-    /**
-     * Check if remote execution is enabled.
-     */
-    bool IsRemoteExecution() const {
+    bool isRemoteExecution() const {
         return m_sshConfig.isValid();
     }
     
-    /**
-     * Start the language server process.
-     * If SSH is configured, runs the server on the remote machine.
-     * @param command The server command (e.g., "clangd" or "nix run nixpkgs#clang-tools -- clangd")
-     * @param workspaceRoot The workspace root path (local path, or remote path if SSH enabled)
-     * @return true if the process started successfully
-     */
-    bool Start(const wxString& command, const wxString& workspaceRoot) {
+    bool start(const std::string& command, const std::string& workspaceRoot) {
         if (m_process) {
-            Stop();
+            stop();
         }
         
         m_workspaceRoot = workspaceRoot;
-        m_process = new wxProcess(this);
-        m_process->Redirect();
         
-        // Build the full command with arguments
-        wxString fullCommand;
-        wxString lspCommand;
+        std::string fullCommand = command + " --background-index";
         
-        if (command.Contains("nix run")) {
-            // For nix run, --background-index goes after the -- separator
-            lspCommand = command + " --background-index";
-        } else {
-            lspCommand = command + " --background-index";
-        }
-        
-        // If SSH is configured, wrap the command
         if (m_sshConfig.isValid()) {
-            wxString sshPrefix = wxString(m_sshConfig.buildSshPrefix());
-            // Escape the LSP command for SSH
-            wxString escapedCmd = lspCommand;
-            escapedCmd.Replace("\"", "\\\"");
-            // Change to workspace directory and run the LSP server
-            fullCommand = sshPrefix + " \"cd '" + workspaceRoot + "' && " + escapedCmd + "\"";
-        } else {
-            fullCommand = lspCommand;
+            std::string sshPrefix = m_sshConfig.buildSshPrefix();
+            fullCommand = sshPrefix + " \"cd '" + workspaceRoot + "' && " + fullCommand + "\"";
         }
         
-        long pid = wxExecute(fullCommand, wxEXEC_ASYNC, m_process);
-        if (pid <= 0) {
-            delete m_process;
-            m_process = nullptr;
+        log("Starting LSP server: " + fullCommand);
+        
+#ifndef _WIN32
+        int stdin_pipe[2], stdout_pipe[2], stderr_pipe[2];
+        
+        if (pipe(stdin_pipe) < 0 || pipe(stdout_pipe) < 0 || pipe(stderr_pipe) < 0) {
+            log("Failed to create pipes");
             return false;
         }
         
-        // Set up event handling for process output
-        Bind(wxEVT_END_PROCESS, &LspClient::OnProcessTerminated, this);
+        pid_t pid = fork();
+        if (pid < 0) {
+            log("Failed to fork process");
+            return false;
+        }
         
-        // Start a timer to poll for output
-        Bind(wxEVT_TIMER, &LspClient::OnPollTimer, this, m_pollTimer.GetId());
-        m_pollTimer.Start(50); // Poll every 50ms
+        if (pid == 0) {
+            // Child process
+            close(stdin_pipe[1]);
+            close(stdout_pipe[0]);
+            close(stderr_pipe[0]);
+            
+            dup2(stdin_pipe[0], STDIN_FILENO);
+            dup2(stdout_pipe[1], STDOUT_FILENO);
+            dup2(stderr_pipe[1], STDERR_FILENO);
+            
+            close(stdin_pipe[0]);
+            close(stdout_pipe[1]);
+            close(stderr_pipe[1]);
+            
+            execl("/bin/sh", "sh", "-c", fullCommand.c_str(), nullptr);
+            _exit(1);
+        }
+        
+        // Parent process
+        close(stdin_pipe[0]);
+        close(stdout_pipe[1]);
+        close(stderr_pipe[1]);
+        
+        m_process = std::make_unique<UnixProcessHandle>(
+            pid, stdin_pipe[1], stdout_pipe[0], stderr_pipe[0]
+        );
+#else
+        // Windows implementation would go here
+        log("Windows not yet supported");
+        return false;
+#endif
+        
+        m_running = true;
+        m_readerThread = std::thread(&LspClient::readerThreadFunc, this);
         
         return true;
     }
     
-    /**
-     * Stop the language server process.
-     */
-    void Stop() {
-        m_pollTimer.Stop();
+    void stop() {
+        if (!m_process) return;
         
-        if (m_process) {
-            // Send shutdown request
-            if (m_initialized) {
-                SendRequest("shutdown", "null");
-                SendNotification("exit", "null");
-            }
-            
-            wxProcess::Kill(m_process->GetPid(), wxSIGTERM);
-            delete m_process;
-            m_process = nullptr;
+        log("Stopping LSP server");
+        
+        if (m_initialized) {
+            sendRequest("shutdown", glz::generic{});
+            sendNotification("exit", glz::generic{});
         }
         
+        m_running = false;
+        
+        if (m_readerThread.joinable()) {
+            m_readerThread.join();
+        }
+        
+        m_process.reset();
         m_initialized = false;
+        
+        std::lock_guard<std::mutex> lock(m_mutex);
         m_pendingRequests.clear();
     }
     
-    /**
-     * Check if the server is running.
-     */
-    bool IsRunning() const {
-        return m_process != nullptr;
+    bool isRunning() const {
+        return m_process && m_process->isRunning();
     }
     
-    /**
-     * Check if the server is initialized and ready.
-     */
-    bool IsInitialized() const {
+    bool isInitialized() const {
         return m_initialized;
     }
     
-    /**
-     * Initialize the language server.
-     * Must be called after Start() before using other methods.
-     */
-    void Initialize(InitializeCallback callback) {
-        wxString rootUri = "file://" + m_workspaceRoot;
-        struct InitParams {
-            int processId;
-            std::string rootUri;
-        };
-        InitParams paramsStruct{static_cast<int>(wxGetProcessId()), std::string(rootUri.ToUTF8().data())};
-        std::string params = glz::write_json(paramsStruct).value();
-        int id = SendRequest("initialize", params);
-        m_pendingRequests[id] = [this, callback](const std::string& resultJson) {
-            // Parse the initialize response
-            glz::generic result;
-            auto ec = glz::read_json(result, resultJson);
-            if (!ec) {
-                // Send initialized notification
-                SendNotification("initialized", "{}");
-                m_initialized = true;
-                if (callback) {
-                    callback(true);
-                }
-            } else {
-                if (callback) {
-                    callback(false);
-                }
-            }
+    void initialize(InitializeCallback callback) {
+        glz::generic params;
+        params["processId"] = getpid();
+        params["rootUri"] = "file://" + m_workspaceRoot;
+        params["capabilities"] = glz::generic{};
+        
+        int id = sendRequest("initialize", params);
+        
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_pendingRequests[id] = [this, callback](const glz::generic& result) {
+            log("Server initialized");
+            sendNotification("initialized", glz::generic{});
+            m_initialized = true;
+            if (callback) callback(true);
         };
     }
-    void DidOpen(const wxString& uri, const wxString& languageId, const wxString& content) {
-        struct DidOpenParams {
-            struct {
-                std::string uri;
-                std::string languageId;
-                int version = 1;
-                std::string text;
-            } textDocument;
-        };
-        DidOpenParams paramsStruct;
-        paramsStruct.textDocument.uri = std::string(uri.ToUTF8().data());
-        paramsStruct.textDocument.languageId = std::string(languageId.ToUTF8().data());
-        paramsStruct.textDocument.text = std::string(content.ToUTF8().data());
-        std::string params = glz::write_json(paramsStruct).value();
-        SendNotification("textDocument/didOpen", params);
+    
+    void didOpen(const std::string& uri, const std::string& languageId, const std::string& content) {
+        glz::generic params;
+        params["textDocument"] = glz::generic{};
+        params["textDocument"]["uri"] = uri;
+        params["textDocument"]["languageId"] = languageId;
+        params["textDocument"]["version"] = 1;
+        params["textDocument"]["text"] = content;
+        
+        sendNotification("textDocument/didOpen", params);
     }
     
-    /**
-     * Notify the server that a document was saved.
-     */
-    void DidSave(const wxString& uri) {
-        struct DidSaveParams {
-            struct {
-                std::string uri;
-            } textDocument;
-        };
-        DidSaveParams paramsStruct;
-        paramsStruct.textDocument.uri = std::string(uri.ToUTF8().data());
-        std::string params = glz::write_json(paramsStruct).value();
-        SendNotification("textDocument/didSave", params);
+    void didChange(const std::string& uri, int version, const std::string& content) {
+        glz::generic params;
+        params["textDocument"] = glz::generic{};
+        params["textDocument"]["uri"] = uri;
+        params["textDocument"]["version"] = version;
+        params["contentChanges"] = std::vector<glz::generic>();
+        params["contentChanges"][0] = glz::generic{};
+        params["contentChanges"][0]["text"] = content;
+        
+        sendNotification("textDocument/didChange", params);
     }
     
-    /**
-     * Notify the server that a document was closed.
-     */
-    void DidClose(const wxString& uri) {
-        struct DidCloseParams {
-            struct {
-                std::string uri;
-            } textDocument;
-        };
-        DidCloseParams paramsStruct;
-        paramsStruct.textDocument.uri = std::string(uri.ToUTF8().data());
-        std::string params = glz::write_json(paramsStruct).value();
-        SendNotification("textDocument/didClose", params);
+    void didSave(const std::string& uri) {
+        glz::generic params;
+        params["textDocument"] = glz::generic{};
+        params["textDocument"]["uri"] = uri;
+        
+        sendNotification("textDocument/didSave", params);
     }
     
-    // ========================================================================
-    // Code Intelligence
-    // ========================================================================
+    void didClose(const std::string& uri) {
+        glz::generic params;
+        params["textDocument"] = glz::generic{};
+        params["textDocument"]["uri"] = uri;
+        
+        sendNotification("textDocument/didClose", params);
+    }
     
-    /**
-     * Get document symbols (outline).
-     */
-    void GetDocumentSymbols(const wxString& uri, SymbolsCallback callback) {
-        struct TextDocumentParams {
-            struct {
-                std::string uri;
-            } textDocument;
-        };
-        TextDocumentParams paramsStruct;
-        paramsStruct.textDocument.uri = std::string(uri.ToUTF8().data());
-        std::string params = glz::write_json(paramsStruct).value();
-        int id = SendRequest("textDocument/documentSymbol", params);
-        m_pendingRequests[id] = [callback](const std::string& resultJson) {
-            std::vector<GzDocumentSymbol> parsed;
-            auto ec = glz::read<glz::opts{.error_on_unknown_keys = false}>(parsed, resultJson);
+    void getDocumentSymbols(const std::string& uri, SymbolsCallback callback) {
+        glz::generic params;
+        params["textDocument"] = glz::generic{};
+        params["textDocument"]["uri"] = uri;
+        
+        int id = sendRequest("textDocument/documentSymbol", params);
+        
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_pendingRequests[id] = [callback](const glz::generic& result) {
             std::vector<LspDocumentSymbol> symbols;
-            if (!ec) {
-                for (const auto& g : parsed) symbols.push_back(fromGzDocumentSymbol(g));
+            if (result.is_array()) {
+                std::string json = glz::write_json(result).value_or("[]");
+                [[maybe_unused]] auto ec = glz::read<glz::opts{.error_on_unknown_keys = false}>(symbols, json);
             }
-            if (callback) {
-                callback(symbols);
-            }
+            if (callback) callback(symbols);
         };
     }
     
-    /**
-     * Go to definition.
-     */
-    void GoToDefinition(const wxString& uri, const LspPosition& pos, LocationCallback callback) {
-        struct DefinitionParams {
-            struct {
-                std::string uri;
-            } textDocument;
-            LspPosition position;
-        };
-        DefinitionParams paramsStruct;
-        paramsStruct.textDocument.uri = std::string(uri.ToUTF8().data());
-        paramsStruct.position = pos;
-        std::string params = glz::write_json(paramsStruct).value();
-        int id = SendRequest("textDocument/definition", params);
-        m_pendingRequests[id] = [callback](const std::string& resultJson) {
-            std::vector<GzLocation> parsed;
-            auto ec = glz::read<glz::opts{.error_on_unknown_keys = false}>(parsed, resultJson);
+    void goToDefinition(const std::string& uri, const LspPosition& pos, LocationCallback callback) {
+        glz::generic params;
+        params["textDocument"] = glz::generic{};
+        params["textDocument"]["uri"] = uri;
+        params["position"] = glz::generic{};
+        params["position"]["line"] = pos.line;
+        params["position"]["character"] = pos.character;
+        
+        int id = sendRequest("textDocument/definition", params);
+        
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_pendingRequests[id] = [callback](const glz::generic& result) {
             std::vector<LspLocation> locations;
-            if (!ec) {
-                for (const auto& g : parsed) locations.push_back(fromGzLocation(g));
+            if (result.is_array()) {
+                std::string json = glz::write_json(result).value_or("[]");
+                [[maybe_unused]] auto ec = glz::read<glz::opts{.error_on_unknown_keys = false}>(locations, json);
             }
-            if (callback) {
-                callback(locations);
-            }
+            if (callback) callback(locations);
         };
     }
     
-    /**
-     * Find all references.
-     */
-    void FindReferences(const wxString& uri, const LspPosition& pos, LocationCallback callback) {
-        struct ReferencesParams {
-            struct {
-                std::string uri;
-            } textDocument;
-            LspPosition position;
-            struct {
-                bool includeDeclaration = true;
-            } context;
-        };
-        ReferencesParams paramsStruct;
-        paramsStruct.textDocument.uri = std::string(uri.ToUTF8().data());
-        paramsStruct.position = pos;
-        paramsStruct.context.includeDeclaration = true;
-        std::string params = glz::write_json(paramsStruct).value();
-        int id = SendRequest("textDocument/references", params);
-        m_pendingRequests[id] = [callback](const std::string& resultJson) {
-            std::vector<GzLocation> parsed;
-            auto ec = glz::read<glz::opts{.error_on_unknown_keys = false}>(parsed, resultJson);
+    void findReferences(const std::string& uri, const LspPosition& pos, LocationCallback callback) {
+        glz::generic params;
+        params["textDocument"] = glz::generic{};
+        params["textDocument"]["uri"] = uri;
+        params["position"] = glz::generic{};
+        params["position"]["line"] = pos.line;
+        params["position"]["character"] = pos.character;
+        params["context"] = glz::generic{};
+        params["context"]["includeDeclaration"] = true;
+        
+        int id = sendRequest("textDocument/references", params);
+        
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_pendingRequests[id] = [callback](const glz::generic& result) {
             std::vector<LspLocation> locations;
-            if (!ec) {
-                for (const auto& g : parsed) locations.push_back(fromGzLocation(g));
+            if (result.is_array()) {
+                std::string json = glz::write_json(result).value_or("[]");
+                [[maybe_unused]] auto ec = glz::read<glz::opts{.error_on_unknown_keys = false}>(locations, json);
             }
-            if (callback) {
-                callback(locations);
-            }
+            if (callback) callback(locations);
         };
     }
     
-    /**
-     * Get completions at position.
-     */
-    void GetCompletions(const wxString& uri, const LspPosition& pos, CompletionCallback callback) {
-        struct CompletionParams {
-            struct {
-                std::string uri;
-            } textDocument;
-            LspPosition position;
-        };
-        CompletionParams paramsStruct;
-        paramsStruct.textDocument.uri = std::string(uri.ToUTF8().data());
-        paramsStruct.position = pos;
-        std::string params = glz::write_json(paramsStruct).value();
-        int id = SendRequest("textDocument/completion", params);
-        m_pendingRequests[id] = [callback](const std::string& resultJson) {
-            std::vector<GzCompletionItem> parsed;
-            auto ec = glz::read<glz::opts{.error_on_unknown_keys = false}>(parsed, resultJson);
+    void getCompletions(const std::string& uri, const LspPosition& pos, CompletionCallback callback) {
+        glz::generic params;
+        params["textDocument"] = glz::generic{};
+        params["textDocument"]["uri"] = uri;
+        params["position"] = glz::generic{};
+        params["position"]["line"] = pos.line;
+        params["position"]["character"] = pos.character;
+        
+        int id = sendRequest("textDocument/completion", params);
+        
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_pendingRequests[id] = [callback](const glz::generic& result) {
             std::vector<LspCompletionItem> items;
-            if (!ec) {
-                for (const auto& g : parsed) items.push_back(fromGzCompletionItem(g));
+            if (result.is_object() && result.contains("items")) {
+                std::string json = glz::write_json(result["items"]).value_or("[]");
+                [[maybe_unused]] auto ec = glz::read<glz::opts{.error_on_unknown_keys = false}>(items, json);
+            } else if (result.is_array()) {
+                std::string json = glz::write_json(result).value_or("[]");
+                [[maybe_unused]] auto ec = glz::read<glz::opts{.error_on_unknown_keys = false}>(items, json);
             }
-            if (callback) {
-                callback(items);
-            }
+            if (callback) callback(items);
         };
     }
     
-    // ========================================================================
-    // Callbacks
-    // ========================================================================
-    
-    /**
-     * Set callback for diagnostics notifications.
-     */
-    void SetDiagnosticsCallback(DiagnosticsCallback callback) {
+    void setDiagnosticsCallback(DiagnosticsCallback callback) {
         m_diagnosticsCallback = callback;
     }
     
 private:
-    wxString m_inputBuffer;
+    void log(const std::string& message) {
+        if (m_logCallback) {
+            m_logCallback(message);
+        }
+    }
     
-    std::map<int, std::function<void(const std::string&)>> m_pendingRequests;
-    std::map<wxString, int> m_documentVersions;
-    DiagnosticsCallback m_diagnosticsCallback;
-    
-    /**
-     * Send a JSON-RPC request (expects a response).
-     */
-    int SendRequest(const std::string& method, const std::string& params) {
+    int sendRequest(const std::string& method, const glz::generic& params) {
         int id = m_nextId++;
-        struct Request {
-            std::string jsonrpc = "2.0";
-            int id;
-            std::string method;
-            std::string params;
-        };
-        Request req{.jsonrpc = "2.0", .id = id, .method = method, .params = params};
-        std::string content = glz::write_json(req).value();
-        SendMessage(wxString::FromUTF8(content.c_str()));
+        
+        glz::generic msg;
+        msg["jsonrpc"] = "2.0";
+        msg["id"] = id;
+        msg["method"] = method;
+        msg["params"] = params;
+        
+        sendMessage(msg);
         return id;
     }
     
-    /**
-     * Send a JSON-RPC notification (no response expected).
-     */
-    void SendNotification(const std::string& method, const std::string& params) {
-        struct Notification {
-            std::string jsonrpc = "2.0";
-            std::string method;
-            std::string params;
-        };
-        Notification notif{.jsonrpc = "2.0", .method = method, .params = params};
-        std::string content = glz::write_json(notif).value();
-        SendMessage(wxString::FromUTF8(content.c_str()));
+    void sendNotification(const std::string& method, const glz::generic& params) {
+        glz::generic msg;
+        msg["jsonrpc"] = "2.0";
+        msg["method"] = method;
+        msg["params"] = params;
+        
+        sendMessage(msg);
     }
     
-    /**
-     * Send a raw LSP message with Content-Length header.
-     */
-    void SendMessage(const wxString& content) {
+    void sendMessage(const glz::generic& msg) {
         if (!m_process) return;
         
-        wxOutputStream* out = m_process->GetOutputStream();
-        if (!out) return;
+        std::string content = glz::write_json(msg).value_or("{}");
+        std::string message = "Content-Length: " + std::to_string(content.size()) + "\r\n\r\n" + content;
         
-        std::string utf8 = content.ToUTF8().data();
-        std::string message = "Content-Length: " + std::to_string(utf8.size()) + "\r\n\r\n" + utf8;
-        
-        out->Write(message.c_str(), message.size());
-    }
-    
-    /**
-     * Poll for output from the server.
-     */
-    void OnPollTimer(wxTimerEvent& event) {
-        if (!m_process) return;
-        
-        wxInputStream* in = m_process->GetInputStream();
-        if (!in || !in->CanRead()) return;
-        
-        // Read available data
-        char buffer[4096];
-        while (in->CanRead()) {
-            in->Read(buffer, sizeof(buffer) - 1);
-            size_t bytesRead = in->LastRead();
-            if (bytesRead == 0) break;
-            
-            buffer[bytesRead] = '\0';
-            m_inputBuffer += wxString::FromUTF8(buffer);
+        if (!m_process->writeStdin(message.c_str(), message.size())) {
+            log("Failed to write to LSP server stdin");
         }
-        
-        // Process complete messages
-        ProcessInputBuffer();
     }
     
-    /**
-     * Process buffered input for complete LSP messages.
-     */
-    void ProcessInputBuffer() {
-        while (true) {
-            // Look for Content-Length header
-            int headerEnd = m_inputBuffer.Find("\r\n\r\n");
-            if (headerEnd == wxNOT_FOUND) break;
+    void readerThreadFunc() {
+        char buffer[4096];
+        
+        while (m_running && m_process) {
+            int bytesRead = m_process->readStdout(buffer, sizeof(buffer) - 1);
             
-            // Parse Content-Length
-            wxString header = m_inputBuffer.Left(headerEnd);
-            long contentLength = 0;
-            
-            int clPos = header.Find("Content-Length:");
-            if (clPos != wxNOT_FOUND) {
-                wxString lenStr = header.Mid(clPos + 15).BeforeFirst('\r').Trim(true).Trim(false);
-                lenStr.ToLong(&contentLength);
+            if (bytesRead > 0) {
+                buffer[bytesRead] = '\0';
+                
+                std::lock_guard<std::mutex> lock(m_mutex);
+                m_inputBuffer += buffer;
+                processInputBuffer();
+            } else if (bytesRead < 0) {
+                log("Error reading from LSP server");
+                break;
             }
             
-            // Check if we have the full message
-            size_t messageStart = headerEnd + 4;
-            if (m_inputBuffer.length() < messageStart + contentLength) break;
-            
-            // Extract and process the message
-            wxString content = m_inputBuffer.Mid(messageStart, contentLength);
-            m_inputBuffer = m_inputBuffer.Mid(messageStart + contentLength);
-            
-            HandleMessage(content);
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
     }
     
-    /**
-     * Handle a received LSP message.
-     */
-    void HandleMessage(const wxString& content) {
-        // Parse the message using Glaze
-        std::string contentStr = std::string(content.ToUTF8().data());
+    void processInputBuffer() {
+        while (true) {
+            size_t header_end = m_inputBuffer.find("\r\n\r\n");
+            if (header_end == std::string::npos) break;
+            
+            size_t content_length = 0;
+            size_t cl_pos = m_inputBuffer.find("Content-Length:");
+            if (cl_pos != std::string::npos && cl_pos < header_end) {
+                size_t num_start = cl_pos + 15;
+                while (num_start < header_end && isspace(m_inputBuffer[num_start])) num_start++;
+                content_length = std::stoul(m_inputBuffer.substr(num_start));
+            }
+            
+            size_t message_start = header_end + 4;
+            if (m_inputBuffer.size() < message_start + content_length) break;
+            
+            std::string content = m_inputBuffer.substr(message_start, content_length);
+            m_inputBuffer = m_inputBuffer.substr(message_start + content_length);
+            
+            handleMessage(content);
+        }
+    }
+    
+    void handleMessage(const std::string& content) {
         glz::generic msg;
-        auto ec = glz::read_json(msg, contentStr);
-        if (ec) return;
-
-        if (msg["id"].is_number()) {
-            int id = msg["id"].as<int>();
+        auto ec = glz::read_json(msg, content);
+        if (ec) {
+            log("Failed to parse LSP message: " + content);
+            return;
+        }
+        
+        if (msg.contains("id") && !msg["id"].is_null()) {
+            int id = static_cast<int>(msg["id"].get<double>());
             auto it = m_pendingRequests.find(id);
             if (it != m_pendingRequests.end()) {
-                std::string result_json = glz::write_json(msg["result"]).value();
-                it->second(result_json);
+                if (msg.contains("result")) {
+                    it->second(msg["result"]);
+                } else if (msg.contains("error")) {
+                    log("LSP error: " + glz::write_json(msg["error"]).value_or("unknown"));
+                }
                 m_pendingRequests.erase(it);
             }
-        } else if (msg["method"].is_string()) {
+        } else if (msg.contains("method")) {
             std::string method = msg["method"].get<std::string>();
-            if (method == "textDocument/publishDiagnostics") {
-                std::string params_json = glz::write_json(msg["params"]).value();
-                HandleDiagnostics(params_json);
+            if (method == "textDocument/publishDiagnostics" && m_diagnosticsCallback) {
+                handleDiagnostics(msg["params"]);
             }
-            // Handle other notifications as needed
         }
     }
     
-    /**
-     * Handle diagnostics notification.
-     */
-    void HandleDiagnostics(const std::string& params) {
-        if (!m_diagnosticsCallback) return;
-        DiagnosticsParams dp;
-        auto ec = glz::read<glz::opts{.error_on_unknown_keys = false}>(dp, params);
-        if (ec) return;
+    void handleDiagnostics(const glz::generic& params) {
+        if (!params.is_object()) return;
+        
+        std::string uri = params["uri"].get<std::string>();
         std::vector<LspDiagnostic> diagnostics;
-        for (const auto& g : dp.diagnostics) {
-            diagnostics.push_back(fromGzDiagnostic(g));
+        
+        if (params.contains("diagnostics") && params["diagnostics"].is_array()) {
+            std::string json = glz::write_json(params["diagnostics"]).value_or("[]");
+            [[maybe_unused]] auto ec = glz::read<glz::opts{.error_on_unknown_keys = false}>(diagnostics, json);
         }
-        m_diagnosticsCallback(dp.uri, diagnostics);
-    }
-    
-    /**
-     * Handle process termination.
-     */
-    void OnProcessTerminated(wxProcessEvent& event) {
-        m_pollTimer.Stop();
-        m_process = nullptr;
-        m_initialized = false;
-    }
-    
-    /**
-     * Parse document symbols from JSON response.
-     */
-    static void ParseSymbols(const std::string& arr, std::vector<LspDocumentSymbol>& symbols) {
-        std::vector<GzDocumentSymbol> parsed;
-        auto ec = glz::read<glz::opts{.error_on_unknown_keys = false}>(parsed, arr);
-        if (!ec) {
-            symbols.clear();
-            for (const auto& g : parsed) symbols.push_back(fromGzDocumentSymbol(g));
-        }
-    }
-    
-    /**
-     * Parse locations from JSON response.
-     */
-    static void ParseLocations(const std::string& result, std::vector<LspLocation>& locations) {
-        std::vector<GzLocation> parsed;
-        auto ec = glz::read<glz::opts{.error_on_unknown_keys = false}>(parsed, result);
-        if (!ec) {
-            locations.clear();
-            for (const auto& g : parsed) locations.push_back(fromGzLocation(g));
+        
+        if (m_diagnosticsCallback) {
+            m_diagnosticsCallback(uri, diagnostics);
         }
     }
 };
@@ -861,113 +688,29 @@ private:
 // Helper Functions
 // ============================================================================
 
-/**
- * Get the icon character for a symbol kind.
- */
-inline wxString GetSymbolKindIcon(LspSymbolKind kind) {
+inline std::string getSymbolKindIcon(LspSymbolKind kind) {
     switch (kind) {
-        case LspSymbolKind::File: return "📄";
-        case LspSymbolKind::Module: return "📦";
-        case LspSymbolKind::Namespace: return "🏷";
-        case LspSymbolKind::Package: return "📦";
+        case LspSymbolKind::Function: return "⚡";
         case LspSymbolKind::Class: return "🔷";
         case LspSymbolKind::Method: return "🔹";
-        case LspSymbolKind::Property: return "🔸";
-        case LspSymbolKind::Field: return "🔸";
-        case LspSymbolKind::Constructor: return "🔧";
-        case LspSymbolKind::Enum: return "📋";
-        case LspSymbolKind::Interface: return "🔶";
-        case LspSymbolKind::Function: return "⚡";
         case LspSymbolKind::Variable: return "📌";
-        case LspSymbolKind::Constant: return "🔒";
-        case LspSymbolKind::String: return "📝";
-        case LspSymbolKind::Number: return "🔢";
-        case LspSymbolKind::Boolean: return "✓";
-        case LspSymbolKind::Array: return "📚";
-        case LspSymbolKind::Object: return "📦";
         case LspSymbolKind::Struct: return "🧱";
-        case LspSymbolKind::EnumMember: return "📋";
-        case LspSymbolKind::Event: return "⚡";
-        case LspSymbolKind::Operator: return "➕";
-        case LspSymbolKind::TypeParameter: return "🅃";
+        case LspSymbolKind::Namespace: return "🏷";
         default: return "•";
     }
 }
 
-/**
- * Get a short name for a symbol kind.
- */
-inline wxString GetSymbolKindName(LspSymbolKind kind) {
-    switch (kind) {
-        case LspSymbolKind::File: return "file";
-        case LspSymbolKind::Module: return "module";
-        case LspSymbolKind::Namespace: return "namespace";
-        case LspSymbolKind::Package: return "package";
-        case LspSymbolKind::Class: return "class";
-        case LspSymbolKind::Method: return "method";
-        case LspSymbolKind::Property: return "property";
-        case LspSymbolKind::Field: return "field";
-        case LspSymbolKind::Constructor: return "constructor";
-        case LspSymbolKind::Enum: return "enum";
-        case LspSymbolKind::Interface: return "interface";
-        case LspSymbolKind::Function: return "function";
-        case LspSymbolKind::Variable: return "variable";
-        case LspSymbolKind::Constant: return "constant";
-        case LspSymbolKind::String: return "string";
-        case LspSymbolKind::Number: return "number";
-        case LspSymbolKind::Boolean: return "boolean";
-        case LspSymbolKind::Array: return "array";
-        case LspSymbolKind::Object: return "object";
-        case LspSymbolKind::Struct: return "struct";
-        case LspSymbolKind::EnumMember: return "enum member";
-        case LspSymbolKind::Event: return "event";
-        case LspSymbolKind::Operator: return "operator";
-        case LspSymbolKind::TypeParameter: return "type param";
-        default: return "symbol";
-    }
-}
-
-/**
- * Convert a file path to a file:// URI.
- */
-inline wxString PathToUri(const wxString& path) {
-    wxString uri = path;
-    uri.Replace("\\", "/");
-    if (!uri.StartsWith("/")) {
-        uri = "/" + uri;
-    }
+inline std::string pathToUri(const std::string& path) {
+    std::string uri = path;
+    if (uri[0] != '/') uri = "/" + uri;
     return "file://" + uri;
 }
 
-/**
- * Convert a file:// URI to a file path.
- */
-inline wxString UriToPath(const wxString& uri) {
-    wxString path = uri;
-    if (path.StartsWith("file://")) {
-        path = path.Mid(7);
+inline std::string uriToPath(const std::string& uri) {
+    if (uri.find("file://") == 0) {
+        return uri.substr(7);
     }
-#ifdef __WXMSW__
-    // On Windows, remove leading slash from /C:/path
-    if (path.length() > 2 && path[0] == '/' && path[2] == ':') {
-        path = path.Mid(1);
-    }
-#endif
-    return path;
+    return uri;
 }
-
-static void ParseLocations(const std::string& resultJson, std::vector<LspLocation>& locations) {
-    std::vector<GzLocation> parsed;
-    auto ec = glz::read<glz::opts{.error_on_unknown_keys = false}>(parsed, resultJson);
-    locations.clear();
-    if (!ec) {
-        for (const auto& g : parsed) locations.push_back(fromGzLocation(g));
-    }
-}
-
-// Glaze meta specializations for LSP types
-namespace glz {
-
-} // namespace glz
 
 #endif // LSP_CLIENT_H
