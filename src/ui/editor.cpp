@@ -339,13 +339,17 @@ bool Editor::OpenFile(const wxString& path)
 
 bool Editor::OpenRemoteFile(const wxString& remotePath, const std::string& sshPrefix)
 {
+    wxLogMessage("Editor::OpenRemoteFile: remotePath='%s'", remotePath);
+    wxLogMessage("Editor::OpenRemoteFile: sshPrefix='%s'", sshPrefix.c_str());
+    
     // Check for unsaved changes
     if (!PromptSaveIfModified()) {
         return false;
     }
     
     // Fetch file content via SSH
-    std::string cmd = sshPrefix + " \"cat '" + remotePath.ToStdString() + "'\" 2>&1";
+    std::string cmd = sshPrefix + " \"cat \\\"" + remotePath.ToStdString() + "\\\"\" 2>&1";
+    wxLogMessage("Editor::OpenRemoteFile: command='%s'", cmd.c_str());
     
 #ifdef _WIN32
     FILE* pipe = _popen(cmd.c_str(), "r");
@@ -354,7 +358,7 @@ bool Editor::OpenRemoteFile(const wxString& remotePath, const std::string& sshPr
 #endif
     
     if (!pipe) {
-        wxMessageBox("Could not connect to remote host", "Error", wxOK | wxICON_ERROR, this);
+        wxLogError("Could not connect to remote host");
         return false;
     }
     
@@ -371,7 +375,7 @@ bool Editor::OpenRemoteFile(const wxString& remotePath, const std::string& sshPr
 #endif
     
     if (status != 0) {
-        wxMessageBox("Could not read remote file: " + remotePath, "Error", wxOK | wxICON_ERROR, this);
+        wxLogError("Could not read remote file: %s (exit code: %d)", remotePath, status);
         return false;
     }
     

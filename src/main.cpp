@@ -22,10 +22,10 @@ public:
         m_logWindow = new wxLogWindow(frame, "Debug Log", false, true);
         
         // Enable verbose logging so wxLogDebug messages are shown
-        wxLog::SetVerbose(true);
+        wxLog::SetVerbose(false);
         
         // Set log level to include debug messages
-        wxLog::SetLogLevel(wxLOG_Debug);
+        wxLog::SetLogLevel(wxLOG_Warning);
         
         return true;
     }

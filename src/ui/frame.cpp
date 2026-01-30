@@ -145,9 +145,11 @@ void MainFrame::SetupUI()
     // Populate tree with current directory (or remote path if SSH enabled)
     m_sshConfig = FrameSshConfig::LoadFromConfig();
     if (m_sshConfig.isValid()) {
-        // SSH enabled - use remote path
+        // SSH enabled - use remote path and expand ~ to actual home directory
         wxString remotePath = Config::Instance().GetString("ssh.remotePath", "~");
-        OpenFolder(remotePath, true);
+        std::string expandedPath = m_sshConfig.expandRemotePath(remotePath.ToStdString());
+        wxLogDebug("MainFrame: expanded remotePath '%s' -> '%s'", remotePath, expandedPath.c_str());
+        OpenFolder(wxString(expandedPath), true);
     } else {
         // Local directory
         wxString currentDir = wxGetCwd();
@@ -310,13 +312,16 @@ void MainFrame::OnTreeItemActivated(wxTreeEvent& event)
         return;
     
     wxString path = data->GetPath();
+    wxLogMessage("MainFrame::OnTreeItemActivated: path='%s', isRemote=%d", path, data->IsRemote());
     
     if (data->IsRemote()) {
         // Remote file - check if it's a directory via SSH
         if (m_sshConfig.isValid()) {
             std::string sshPrefix = m_sshConfig.buildSshPrefix();
-            std::string testCmd = sshPrefix + " \"test -d '\" + path.ToStdString() + \"'\" 2>&1";
+            std::string testCmd = sshPrefix + " \"test -d \\\"" + path.ToStdString() + "\\\"\" 2>&1";
+            wxLogMessage("MainFrame::OnTreeItemActivated: testCmd='%s'", testCmd.c_str());
             int result = system(testCmd.c_str());
+            wxLogMessage("MainFrame::OnTreeItemActivated: test result=%d", result);
             
             if (result != 0) {
                 // It's a file, open it remotely

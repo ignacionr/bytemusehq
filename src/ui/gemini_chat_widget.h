@@ -1153,6 +1153,10 @@ private:
         if (sshEnabled) {
             // Use remote path when SSH is enabled
             workDir = config.GetString("ssh.remotePath", "~").ToStdString();
+            
+            // Expand ~ to actual home directory path via SSH
+            MCP::FilesystemSshConfig tempSsh = LoadFilesystemSshConfig();
+            workDir = tempSsh.expandRemotePath(workDir);
         } else {
             workDir = wxGetCwd().ToStdString();
         }

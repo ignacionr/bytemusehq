@@ -65,6 +65,40 @@ struct FrameSshConfig {
     
     bool isValid() const { return enabled && !host.empty(); }
     
+    /**
+     * Expand tilde to actual home directory path via SSH.
+     * Returns the expanded path, or the original if expansion fails.
+     */
+    std::string expandRemotePath(const std::string& path) const {
+        if (path.empty() || path[0] != '~') {
+            return path;  // No tilde to expand
+        }
+        
+        if (!isValid()) {
+            return path;
+        }
+        
+        // Use eval to expand the tilde on the remote side
+        std::string cmd = buildSshPrefix() + " \"eval echo " + path + "\" 2>/dev/null";
+        FILE* pipe = popen(cmd.c_str(), "r");
+        if (!pipe) {
+            return path;
+        }
+        
+        char buffer[1024];
+        std::string result;
+        if (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+            result = buffer;
+            // Remove trailing newline
+            while (!result.empty() && (result.back() == '\n' || result.back() == '\r')) {
+                result.pop_back();
+            }
+        }
+        int status = pclose(pipe);
+        
+        return (result.empty() || status != 0) ? path : result;
+    }
+    
     static FrameSshConfig LoadFromConfig() {
         auto& config = Config::Instance();
         FrameSshConfig ssh;
