@@ -41,6 +41,7 @@ set(SOURCES
     src/config/config.cpp
     src/theme/theme.cpp
     src/http/http_client.cpp
+    src/fs/fs.cpp
 )
 
 set(HEADERS
@@ -58,6 +59,7 @@ set(HEADERS
     src/config/config.h
     src/theme/theme.h
     src/http/http_client.h
+    src/fs/fs.h
 )
 
 # Create executable

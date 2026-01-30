@@ -10,6 +10,7 @@
 #include "../theme/theme.h"
 #include "../mcp/mcp.h"
 #include "../mcp/mcp_code_index.h"
+#include "../fs/fs.h"
 #include "builtin_widgets.h"
 #include "widget_bar.h"
 #include "widget_activity_bar.h"
@@ -142,22 +143,9 @@ void MainFrame::SetupUI()
     mainSizer->Add(m_hSplitter, 1, wxEXPAND);
     m_mainPanel->SetSizer(mainSizer);
     
-    // Populate tree with current directory (or remote path if SSH enabled)
-    m_sshConfig = FrameSshConfig::LoadFromConfig();
-    if (m_sshConfig.isValid()) {
-        // SSH enabled - use remote path and expand ~ to actual home directory
-        wxString remotePath = Config::Instance().GetString("ssh.remotePath", "~");
-        std::string expandedPath = m_sshConfig.expandRemotePath(remotePath.ToStdString());
-        wxLogDebug("MainFrame: expanded remotePath '%s' -> '%s'", remotePath, expandedPath.c_str());
-        OpenFolder(wxString(expandedPath), true);
-    } else {
-        // Local directory
-        wxString currentDir = wxGetCwd();
-        wxTreeItemId rootId = m_treeCtrl->AddRoot(currentDir);
-        m_treeCtrl->SetItemData(rootId, new PathData(currentDir, false));
-        PopulateTree(currentDir, rootId);
-        m_treeCtrl->Expand(rootId);
-    }
+    // Initialize filesystem and populate tree
+    m_filesystem = FS::Filesystem::FromConfig();
+    OpenFolder(m_filesystem.rootPath(), m_filesystem.isRemote());
 }
 
 void MainFrame::ApplyCurrentTheme()
@@ -266,37 +254,24 @@ void MainFrame::UpdateTitle()
     SetTitle(title);
 }
 
-void MainFrame::PopulateTree(const wxString& path, wxTreeItemId parentItem)
+void MainFrame::PopulateTree(const wxTreeItemId& parentItem)
 {
-    wxDir dir(path);
-    if (!dir.IsOpened())
-        return;
+    PathData* parentData = dynamic_cast<PathData*>(m_treeCtrl->GetItemData(parentItem));
+    if (!parentData) return;
     
-    wxString filename;
-    bool cont = dir.GetFirst(&filename);
+    wxString path = parentData->GetPath();
+    auto entries = m_filesystem.listDirectory(path, false);  // Don't include hidden files
     
-    while (cont) {
-        // Skip hidden files/directories (starting with .)
-        if (!filename.StartsWith(".")) {
-            wxString fullPath = wxFileName(path, filename).GetFullPath();
-            
-            if (wxDir::Exists(fullPath)) {
-                // It's a directory
-                wxTreeItemId itemId = m_treeCtrl->AppendItem(
-                    parentItem, filename, -1, -1,
-                    new PathData(fullPath)
-                );
-                // Add a dummy child to show expand arrow
-                m_treeCtrl->AppendItem(itemId, "");
-            } else {
-                // It's a file
-                m_treeCtrl->AppendItem(
-                    parentItem, filename, -1, -1,
-                    new PathData(fullPath)
-                );
-            }
+    for (const auto& entry : entries) {
+        wxTreeItemId itemId = m_treeCtrl->AppendItem(
+            parentItem, entry.name, -1, -1,
+            new PathData(entry.fullPath, m_filesystem.isRemote())
+        );
+        
+        // Add a dummy child for directories to show expand arrow
+        if (entry.isDirectory) {
+            m_treeCtrl->AppendItem(itemId, "");
         }
-        cont = dir.GetNext(&filename);
     }
     
     // Sort items
@@ -314,24 +289,11 @@ void MainFrame::OnTreeItemActivated(wxTreeEvent& event)
     wxString path = data->GetPath();
     wxLogMessage("MainFrame::OnTreeItemActivated: path='%s', isRemote=%d", path, data->IsRemote());
     
-    if (data->IsRemote()) {
-        // Remote file - check if it's a directory via SSH
-        if (m_sshConfig.isValid()) {
-            std::string sshPrefix = m_sshConfig.buildSshPrefix();
-            std::string testCmd = sshPrefix + " \"test -d \\\"" + path.ToStdString() + "\\\"\" 2>&1";
-            wxLogMessage("MainFrame::OnTreeItemActivated: testCmd='%s'", testCmd.c_str());
-            int result = system(testCmd.c_str());
-            wxLogMessage("MainFrame::OnTreeItemActivated: test result=%d", result);
-            
-            if (result != 0) {
-                // It's a file, open it remotely
-                m_editor->OpenRemoteFile(path, m_sshConfig.buildSshPrefix());
-            }
-            // If it's a directory, do nothing (expand handles it)
-        }
-    } else {
-        // Local file - only open files, not directories
-        if (!wxDir::Exists(path) && wxFileExists(path)) {
+    // Only open files, not directories
+    if (!m_filesystem.isDirectory(path)) {
+        if (m_filesystem.isRemote()) {
+            m_editor->OpenRemoteFile(path, m_filesystem.sshPrefix());
+        } else {
             m_editor->OpenFile(path);
         }
     }
@@ -356,15 +318,8 @@ void MainFrame::OnTreeItemExpanding(wxTreeEvent& event)
             // This is the dummy child, remove it
             m_treeCtrl->Delete(firstChild);
             
-            // Now populate the actual children
-            PathData* parentData = dynamic_cast<PathData*>(m_treeCtrl->GetItemData(itemId));
-            if (parentData) {
-                if (parentData->IsRemote()) {
-                    PopulateTreeRemote(parentData->GetPath(), itemId);
-                } else {
-                    PopulateTree(parentData->GetPath(), itemId);
-                }
-            }
+            // Now populate the actual children using the unified filesystem
+            PopulateTree(itemId);
         }
     }
 }
@@ -701,24 +656,17 @@ void MainFrame::OnToggleTerminal(wxCommandEvent& event)
 
 void MainFrame::OpenFolder(const wxString& path, bool isRemote)
 {
-    m_isRemoteTree = isRemote;
-    
     if (isRemote) {
-        // Load SSH config for remote browsing
-        m_sshConfig = FrameSshConfig::LoadFromConfig();
-        if (!m_sshConfig.isValid()) {
+        // Reload SSH config and create remote filesystem
+        auto sshConfig = FS::SshConfig::LoadFromConfig();
+        if (!sshConfig.isValid()) {
             wxMessageBox("SSH is not properly configured. Please check ssh.host in config.",
                         "SSH Error", wxOK | wxICON_ERROR, this);
             return;
         }
-        
-        // Update terminal to use SSH if available
-        if (m_terminal) {
-            // Don't change local working directory for remote folders
-            // Terminal will need its own SSH handling
-        }
+        m_filesystem = FS::Filesystem::Remote(sshConfig, path);
     } else {
-        // Local folder
+        // Verify local path exists
         if (!wxDir::Exists(path)) return;
         
         // Change the current working directory
@@ -728,83 +676,27 @@ void MainFrame::OpenFolder(const wxString& path, bool isRemote)
         if (m_terminal) {
             m_terminal->SetWorkingDirectory(path);
         }
+        
+        m_filesystem = FS::Filesystem::Local(path);
     }
     
     // Clear the existing tree
     m_treeCtrl->DeleteAllItems();
     
-    // Populate tree with the new directory
-    wxString displayPath = path;
-    if (isRemote) {
-        displayPath = "[SSH] " + path;
-    }
-    wxTreeItemId rootId = m_treeCtrl->AddRoot(displayPath);
-    m_treeCtrl->SetItemData(rootId, new PathData(path, isRemote));
+    // Create root node with display path
+    wxString displayPath = m_filesystem.isRemote() 
+        ? "[SSH] " + m_filesystem.rootPath() 
+        : m_filesystem.rootPath();
     
-    if (isRemote) {
-        PopulateTreeRemote(path, rootId);
-    } else {
-        PopulateTree(path, rootId);
-    }
+    wxTreeItemId rootId = m_treeCtrl->AddRoot(displayPath);
+    m_treeCtrl->SetItemData(rootId, new PathData(m_filesystem.rootPath(), m_filesystem.isRemote()));
+    
+    // Populate tree using unified filesystem
+    PopulateTree(rootId);
     m_treeCtrl->Expand(rootId);
     
     // Update the window title to reflect the change
     UpdateTitle();
 }
 
-void MainFrame::PopulateTreeRemote(const wxString& path, wxTreeItemId parentItem)
-{
-    if (!m_sshConfig.isValid()) return;
-    
-    std::string sshPrefix = m_sshConfig.buildSshPrefix();
-    std::string cmd = sshPrefix + " \"ls -la '" + path.ToStdString() + "' 2>/dev/null\" 2>&1";
-    
-    FILE* pipe = popen(cmd.c_str(), "r");
-    if (!pipe) return;
-    
-    std::string output;
-    char buffer[4096];
-    while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
-        output += buffer;
-    }
-    pclose(pipe);
-    
-    std::istringstream stream(output);
-    std::string line;
-    
-    while (std::getline(stream, line)) {
-        // Skip total line and empty lines
-        if (line.empty() || line.find("total") == 0) continue;
-        
-        // Parse ls -la output
-        std::istringstream lineStream(line);
-        std::string permissions, links, owner, group, size, month, day, timeStr, name;
-        lineStream >> permissions >> links >> owner >> group >> size >> month >> day >> timeStr;
-        std::getline(lineStream, name);
-        
-        // Trim leading whitespace from name
-        size_t start = name.find_first_not_of(" \t");
-        if (start != std::string::npos) {
-            name = name.substr(start);
-        }
-        
-        // Skip . and .. and hidden files
-        if (name.empty() || name == "." || name == ".." || name[0] == '.') continue;
-        
-        wxString fullPath = path;
-        if (!fullPath.EndsWith("/")) fullPath += "/";
-        fullPath += wxString(name);
-        
-        bool isDirectory = !permissions.empty() && permissions[0] == 'd';
-        
-        if (isDirectory) {
-            wxTreeItemId itemId = m_treeCtrl->AppendItem(
-                parentItem, wxString(name), -1, -1, new PathData(fullPath, true));
-            m_treeCtrl->AppendItem(itemId, ""); // Dummy for expand arrow
-        } else {
-            m_treeCtrl->AppendItem(
-                parentItem, wxString(name), -1, -1, new PathData(fullPath, true));
-        }
-    }
-    m_treeCtrl->SortChildren(parentItem);
-}
+

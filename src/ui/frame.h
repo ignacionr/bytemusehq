@@ -12,13 +12,8 @@
 #include "../commands/command.h"
 #include "../theme/theme.h"
 #include "../config/config.h"
+#include "../fs/fs.h"
 #include <sstream>
-
-#ifdef _WIN32
-#include <io.h>
-#define popen _popen
-#define pclose _pclose
-#endif
 
 // Forward declarations
 class WidgetActivityBar;
@@ -38,79 +33,6 @@ public:
 private:
     wxString m_path;
     bool m_isRemote;
-};
-
-// SSH configuration for remote folder browsing
-struct FrameSshConfig {
-    bool enabled = false;
-    std::string host;
-    int port = 22;
-    std::string user;
-    std::string identityFile;
-    std::string extraOptions;
-    int connectionTimeout = 30;
-    
-    std::string buildSshPrefix() const {
-        if (!enabled || host.empty()) return "";
-        std::string cmd = "ssh";
-        if (!extraOptions.empty()) cmd += " " + extraOptions;
-        if (!identityFile.empty()) cmd += " -i \"" + identityFile + "\"";
-        if (port != 22) cmd += " -p " + std::to_string(port);
-        cmd += " -o ConnectTimeout=" + std::to_string(connectionTimeout);
-        cmd += " -o BatchMode=yes";
-        if (!user.empty()) cmd += " " + user + "@" + host;
-        else cmd += " " + host;
-        return cmd;
-    }
-    
-    bool isValid() const { return enabled && !host.empty(); }
-    
-    /**
-     * Expand tilde to actual home directory path via SSH.
-     * Returns the expanded path, or the original if expansion fails.
-     */
-    std::string expandRemotePath(const std::string& path) const {
-        if (path.empty() || path[0] != '~') {
-            return path;  // No tilde to expand
-        }
-        
-        if (!isValid()) {
-            return path;
-        }
-        
-        // Use eval to expand the tilde on the remote side
-        std::string cmd = buildSshPrefix() + " \"eval echo " + path + "\" 2>/dev/null";
-        FILE* pipe = popen(cmd.c_str(), "r");
-        if (!pipe) {
-            return path;
-        }
-        
-        char buffer[1024];
-        std::string result;
-        if (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
-            result = buffer;
-            // Remove trailing newline
-            while (!result.empty() && (result.back() == '\n' || result.back() == '\r')) {
-                result.pop_back();
-            }
-        }
-        int status = pclose(pipe);
-        
-        return (result.empty() || status != 0) ? path : result;
-    }
-    
-    static FrameSshConfig LoadFromConfig() {
-        auto& config = Config::Instance();
-        FrameSshConfig ssh;
-        ssh.enabled = config.GetBool("ssh.enabled", false);
-        ssh.host = config.GetString("ssh.host", "").ToStdString();
-        ssh.port = config.GetInt("ssh.port", 22);
-        ssh.user = config.GetString("ssh.user", "").ToStdString();
-        ssh.identityFile = config.GetString("ssh.identityFile", "").ToStdString();
-        ssh.extraOptions = config.GetString("ssh.extraOptions", "").ToStdString();
-        ssh.connectionTimeout = config.GetInt("ssh.connectionTimeout", 30);
-        return ssh;
-    }
 };
 
 class MainFrame : public wxFrame {
@@ -168,12 +90,10 @@ private:
     void SetupAccelerators();
     void RegisterCommands();
     void RegisterWidgets();
-    void PopulateTree(const wxString& path, wxTreeItemId parentItem);
-    void PopulateTreeRemote(const wxString& path, wxTreeItemId parentItem);
+    void PopulateTree(const wxTreeItemId& parentItem);
     void UpdateTitle();
     
-    FrameSshConfig m_sshConfig;  // SSH configuration for remote browsing
-    bool m_isRemoteTree = false; // Whether current tree is remote
+    FS::Filesystem m_filesystem;       // Unified filesystem access (local or remote)
     
     // Theme support
     void ApplyTheme(const ThemePtr& theme);

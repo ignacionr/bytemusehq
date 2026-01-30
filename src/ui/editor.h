@@ -7,6 +7,7 @@
 #include <functional>
 #include <string>
 #include "../theme/theme.h"
+#include "../fs/fs.h"
 
 /**
  * Editor component for ByteMuseHQ.
@@ -56,8 +57,7 @@ private:
     wxString m_currentFilePath;
     bool m_isModified;
     int m_themeListenerId;
-    bool m_isRemoteFile = false;
-    std::string m_sshPrefix;
+    std::optional<FS::Filesystem> m_filesystem;  // Filesystem for current file (local or remote)
     
     // Callbacks
     DirtyStateCallback m_dirtyCallback;
