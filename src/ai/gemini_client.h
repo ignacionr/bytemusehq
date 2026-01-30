@@ -1,6 +1,9 @@
 #ifndef GEMINI_CLIENT_H
 #define GEMINI_CLIENT_H
 
+#include "ai_types.h"
+#include "ai_provider_gemini.h"
+#include "ai_provider_cortex.h"
 #include "../http/http_client.h"
 #include "../config/config.h"
 #include "../mcp/mcp.h"
@@ -13,124 +16,8 @@
 
 namespace AI {
 
-/**
- * Message role in a conversation.
- */
-enum class MessageRole {
-    User,
-    Model,
-    System
-};
-
-/**
- * A single message in a conversation.
- */
-struct ChatMessage {
-    MessageRole role;
-    std::string content;
-    
-    ChatMessage() = default;
-    ChatMessage(MessageRole r, const std::string& c) : role(r), content(c) {}
-    
-    std::string roleString() const {
-        switch (role) {
-            case MessageRole::User: return "user";
-            case MessageRole::Model: return "model";
-            case MessageRole::System: return "user"; // Gemini uses user for system prompts
-            default: return "user";
-        }
-    }
-};
-
-/**
- * Result of an AI API call.
- */
-struct GeminiResponse {
-    std::string text;           // Generated text
-    bool success = false;       // Whether the call succeeded
-    std::string error;          // Error message if failed
-    long httpCode = 0;          // HTTP status code
-    int promptTokens = 0;       // Tokens used in prompt
-    int completionTokens = 0;   // Tokens in completion
-    
-    // Function calling support
-    bool hasFunctionCall = false;
-    std::string functionName;
-    std::string functionArgs;   // JSON string of arguments
-    
-    bool isOk() const { return success && error.empty(); }
-    bool needsFunctionCall() const { return success && hasFunctionCall; }
-};
-
-/**
- * AI provider type - determines API format and authentication method.
- */
-enum class AIProvider {
-    Gemini,     // Google Gemini API (key in URL parameter)
-    Cortex      // Cortex/OpenAI-compatible API (Bearer token header)
-};
-
-/**
- * Configuration for AI API calls.
- */
-struct GeminiConfig {
-    // Provider settings
-    AIProvider provider = AIProvider::Gemini;
-    std::string baseUrl;        // Custom base URL (empty = use default for provider)
-    std::string apiKey;
-    
-    // Model settings
-    std::string model = "gemini-1.5-flash";
-    float temperature = 0.7f;
-    int maxOutputTokens = 2048;
-    float topP = 0.95f;
-    int topK = 40;
-    std::string systemInstruction;
-    
-    // MCP/Function calling settings
-    bool enableMCP = true;      // Enable MCP tool calling
-    int maxToolCalls = 5;       // Maximum tool calls per response
-    
-    // Safety settings - block thresholds (Gemini only)
-    // Options: BLOCK_NONE, BLOCK_ONLY_HIGH, BLOCK_MEDIUM_AND_ABOVE, BLOCK_LOW_AND_ABOVE
-    // Default to BLOCK_ONLY_HIGH for dev tools that need to run system commands
-    std::string safetyThreshold = "BLOCK_ONLY_HIGH";
-    
-    // Get the effective base URL for the current provider
-    std::string getEffectiveBaseUrl() const {
-        if (!baseUrl.empty()) return baseUrl;
-        switch (provider) {
-            case AIProvider::Gemini:
-                return "https://generativelanguage.googleapis.com/v1beta";
-            case AIProvider::Cortex:
-                return ""; // Must be configured
-            default:
-                return "";
-        }
-    }
-    
-    // Get provider name as string
-    std::string providerName() const {
-        switch (provider) {
-            case AIProvider::Gemini: return "gemini";
-            case AIProvider::Cortex: return "cortex";
-            default: return "unknown";
-        }
-    }
-    
-    // Parse provider from string
-    static AIProvider parseProvider(const std::string& name) {
-        if (name == "cortex") return AIProvider::Cortex;
-        return AIProvider::Gemini; // Default
-    }
-};
-
-/**
- * Callback for streaming responses.
- * Called with each chunk of text as it arrives.
- * Return false to cancel the stream.
- */
-using StreamCallback = std::function<bool(const std::string& chunk)>;
+// Types are imported from ai_types.h
+// ChatMessage, AIResponse (GeminiResponse), AIConfig (GeminiConfig), AIProvider, MessageRole, StreamCallback
 
 /**
  * Google Gemini API client.
@@ -602,78 +489,17 @@ private:
     std::vector<ChatMessage> m_conversationHistory;
     
     /**
-     * Parse Gemini models list response.
-     * Response format: { "models": [{ "name": "models/gemini-...", ... }, ...] }
+     * Parse Gemini models list response - delegates to GeminiProvider.
      */
     std::vector<std::string> ParseGeminiModelsResponse(const std::string& body) const {
-        std::vector<std::string> models;
-        
-        // Find all model names - looking for "name": "models/..."
-        size_t pos = 0;
-        while ((pos = body.find("\"name\"", pos)) != std::string::npos) {
-            size_t colonPos = body.find(":", pos);
-            if (colonPos == std::string::npos) break;
-            
-            size_t quoteStart = body.find("\"", colonPos + 1);
-            if (quoteStart == std::string::npos) break;
-            
-            size_t quoteEnd = body.find("\"", quoteStart + 1);
-            if (quoteEnd == std::string::npos) break;
-            
-            std::string fullName = body.substr(quoteStart + 1, quoteEnd - quoteStart - 1);
-            
-            // Extract model name from "models/gemini-xxx" format
-            size_t slashPos = fullName.find("/");
-            std::string modelName = (slashPos != std::string::npos) 
-                ? fullName.substr(slashPos + 1) 
-                : fullName;
-            
-            // Filter for generative models (skip embedding models, etc.)
-            if (modelName.find("gemini") != std::string::npos && 
-                modelName.find("embedding") == std::string::npos) {
-                models.push_back(modelName);
-            }
-            
-            pos = quoteEnd + 1;
-        }
-        
-        return models;
+        return GeminiProvider::parseModelsResponse(body);
     }
     
     /**
-     * Parse Cortex/OpenAI models list response.
-     * Response format: { "data": [{ "id": "gpt-4", ... }, ...] }
+     * Parse Cortex/OpenAI models list response - delegates to CortexProvider.
      */
     std::vector<std::string> ParseCortexModelsResponse(const std::string& body) const {
-        std::vector<std::string> models;
-        
-        // Find the "data" array
-        size_t dataPos = body.find("\"data\"");
-        if (dataPos == std::string::npos) return models;
-        
-        // Find all model IDs within the data array
-        size_t pos = dataPos;
-        while ((pos = body.find("\"id\"", pos)) != std::string::npos) {
-            size_t colonPos = body.find(":", pos);
-            if (colonPos == std::string::npos) break;
-            
-            size_t quoteStart = body.find("\"", colonPos + 1);
-            if (quoteStart == std::string::npos) break;
-            
-            size_t quoteEnd = body.find("\"", quoteStart + 1);
-            if (quoteEnd == std::string::npos) break;
-            
-            std::string modelId = body.substr(quoteStart + 1, quoteEnd - quoteStart - 1);
-            
-            // Add all models (Cortex may expose various models)
-            if (!modelId.empty()) {
-                models.push_back(modelId);
-            }
-            
-            pos = quoteEnd + 1;
-        }
-        
-        return models;
+        return CortexProvider::parseModelsResponse(body);
     }
     
     /**
@@ -682,35 +508,6 @@ private:
     std::string BuildEndpoint() const {
         return "https://generativelanguage.googleapis.com/v1beta/models/" 
                + m_config.model + ":generateContent?key=" + m_config.apiKey;
-    }
-    
-    /**
-     * Escape a string for JSON.
-     */
-    std::string EscapeJson(const std::string& str) const {
-        std::string result;
-        result.reserve(str.size() + 32);
-        
-        for (char c : str) {
-            switch (c) {
-                case '"':  result += "\\\""; break;
-                case '\\': result += "\\\\"; break;
-                case '\n': result += "\\n"; break;
-                case '\r': result += "\\r"; break;
-                case '\t': result += "\\t"; break;
-                case '\b': result += "\\b"; break;
-                case '\f': result += "\\f"; break;
-                default:
-                    if (static_cast<unsigned char>(c) < 0x20) {
-                        char buf[8];
-                        snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned char>(c));
-                        result += buf;
-                    } else {
-                        result += c;
-                    }
-            }
-        }
-        return result;
     }
     
     /**
@@ -734,14 +531,14 @@ private:
             first = false;
             
             json += "{\"role\":\"" + msg.roleString() + "\",";
-            json += "\"parts\":[{\"text\":\"" + EscapeJson(msg.content) + "\"}]}";
+            json += "\"parts\":[{\"text\":\"" + escapeJson(msg.content) + "\"}]}";
         }
         json += "]";
         
         // System instruction (if set)
         if (!m_config.systemInstruction.empty()) {
             json += ",\"systemInstruction\":{\"parts\":[{\"text\":\"" 
-                 + EscapeJson(m_config.systemInstruction) + "\"}]}";
+                 + escapeJson(m_config.systemInstruction) + "\"}]}";
         }
         
         // Add MCP tools if enabled
@@ -788,7 +585,7 @@ private:
         
         // Add system instruction as first message if set
         if (!config.systemInstruction.empty()) {
-            json += "{\"role\":\"system\",\"content\":\"" + EscapeJson(config.systemInstruction) + "\"}";
+            json += "{\"role\":\"system\",\"content\":\"" + escapeJson(config.systemInstruction) + "\"}";
             first = false;
         }
         
@@ -804,7 +601,7 @@ private:
                 case MessageRole::System: role = "system"; break;
             }
             
-            json += "{\"role\":\"" + role + "\",\"content\":\"" + EscapeJson(msg.content) + "\"}";
+            json += "{\"role\":\"" + role + "\",\"content\":\"" + escapeJson(msg.content) + "\"}";
         }
         json += "],";
         
@@ -821,260 +618,18 @@ private:
     
     /**
      * Parse the response JSON from Cortex/OpenAI-compatible API.
+     * Delegates to CortexProvider which uses Glaze for proper JSON parsing.
      */
     GeminiResponse ParseCortexResponse(const std::string& responseBody, long httpCode) const {
-        GeminiResponse result;
-        result.httpCode = httpCode;
-        
-        // Check for error response
-        size_t errorPos = responseBody.find("\"error\"");
-        if (errorPos != std::string::npos) {
-            size_t msgStart = responseBody.find("\"message\"", errorPos);
-            if (msgStart != std::string::npos) {
-                msgStart = responseBody.find("\"", msgStart + 9) + 1;
-                size_t msgEnd = responseBody.find("\"", msgStart);
-                if (msgEnd != std::string::npos) {
-                    result.error = responseBody.substr(msgStart, msgEnd - msgStart);
-                }
-            }
-            if (result.error.empty()) {
-                result.error = "API returned an error (HTTP " + std::to_string(httpCode) + ")";
-            }
-            return result;
-        }
-        
-        // OpenAI format: choices[0].message.content
-        size_t choicesPos = responseBody.find("\"choices\"");
-        if (choicesPos == std::string::npos) {
-            result.error = "Invalid response format: no choices found";
-            return result;
-        }
-        
-        // Find message content
-        size_t messagePos = responseBody.find("\"message\"", choicesPos);
-        if (messagePos == std::string::npos) {
-            result.error = "Invalid response format: no message found";
-            return result;
-        }
-        
-        size_t contentPos = responseBody.find("\"content\"", messagePos);
-        if (contentPos == std::string::npos) {
-            result.error = "Invalid response format: no content found";
-            return result;
-        }
-        
-        // Extract content value
-        size_t textStart = responseBody.find("\"", contentPos + 9) + 1;
-        size_t textEnd = textStart;
-        
-        // Handle escaped quotes in the text
-        while (textEnd < responseBody.size()) {
-            if (responseBody[textEnd] == '\\') {
-                textEnd += 2; // Skip escaped character
-                continue;
-            }
-            if (responseBody[textEnd] == '"') {
-                break;
-            }
-            textEnd++;
-        }
-        
-        std::string text = responseBody.substr(textStart, textEnd - textStart);
-        result.text = UnescapeJson(text);
-        result.success = true;
-        
-        // Try to extract token usage
-        size_t usagePos = responseBody.find("\"usage\"");
-        if (usagePos != std::string::npos) {
-            size_t promptPos = responseBody.find("\"prompt_tokens\"", usagePos);
-            if (promptPos != std::string::npos) {
-                size_t numStart = responseBody.find(":", promptPos) + 1;
-                result.promptTokens = std::atoi(responseBody.c_str() + numStart);
-            }
-            
-            size_t completionPos = responseBody.find("\"completion_tokens\"", usagePos);
-            if (completionPos != std::string::npos) {
-                size_t numStart = responseBody.find(":", completionPos) + 1;
-                result.completionTokens = std::atoi(responseBody.c_str() + numStart);
-            }
-        }
-        
-        return result;
+        return CortexProvider::parseResponse(responseBody, httpCode);
     }
     
     /**
      * Parse the response JSON from the Gemini API.
+     * Delegates to GeminiProvider which uses Glaze for proper JSON parsing.
      */
     GeminiResponse ParseResponse(const std::string& responseBody, long httpCode) const {
-        GeminiResponse result;
-        result.httpCode = httpCode;
-        
-        // Very basic JSON parsing (in production, use a proper JSON library)
-        // Look for the text field in the response
-        
-        // Check for error response
-        size_t errorPos = responseBody.find("\"error\"");
-        if (errorPos != std::string::npos) {
-            size_t msgStart = responseBody.find("\"message\"", errorPos);
-            if (msgStart != std::string::npos) {
-                msgStart = responseBody.find("\"", msgStart + 9) + 1;
-                size_t msgEnd = responseBody.find("\"", msgStart);
-                if (msgEnd != std::string::npos) {
-                    result.error = responseBody.substr(msgStart, msgEnd - msgStart);
-                }
-            }
-            if (result.error.empty()) {
-                result.error = "API returned an error (HTTP " + std::to_string(httpCode) + ")";
-            }
-            return result;
-        }
-        
-        // Check for function call response
-        size_t functionCallPos = responseBody.find("\"functionCall\"");
-        if (functionCallPos != std::string::npos) {
-            result.hasFunctionCall = true;
-            result.success = true;
-            
-            // Extract function name
-            size_t namePos = responseBody.find("\"name\"", functionCallPos);
-            if (namePos != std::string::npos) {
-                namePos = responseBody.find("\"", namePos + 6) + 1;
-                size_t nameEnd = responseBody.find("\"", namePos);
-                if (nameEnd != std::string::npos) {
-                    result.functionName = responseBody.substr(namePos, nameEnd - namePos);
-                }
-            }
-            
-            // Extract function arguments (as JSON object)
-            size_t argsPos = responseBody.find("\"args\"", functionCallPos);
-            if (argsPos != std::string::npos) {
-                // Find the opening brace of the args object
-                size_t braceStart = responseBody.find("{", argsPos);
-                if (braceStart != std::string::npos) {
-                    // Find matching closing brace
-                    int braceCount = 1;
-                    size_t braceEnd = braceStart + 1;
-                    while (braceEnd < responseBody.size() && braceCount > 0) {
-                        if (responseBody[braceEnd] == '{') braceCount++;
-                        else if (responseBody[braceEnd] == '}') braceCount--;
-                        braceEnd++;
-                    }
-                    result.functionArgs = responseBody.substr(braceStart, braceEnd - braceStart);
-                }
-            }
-            
-            return result;
-        }
-        
-        // Find the text content in candidates[0].content.parts[0].text
-        size_t textStart = responseBody.find("\"text\"");
-        if (textStart == std::string::npos) {
-            // Check for blocked content - various indicators
-            if (responseBody.find("\"finishReason\":\"SAFETY\"") != std::string::npos ||
-                responseBody.find("\"finishReason\": \"SAFETY\"") != std::string::npos ||
-                responseBody.find("BLOCKED") != std::string::npos ||
-                responseBody.find("blockReason") != std::string::npos) {
-                // Try to identify which category triggered
-                std::string category = "unknown";
-                if (responseBody.find("HARM_CATEGORY_DANGEROUS_CONTENT") != std::string::npos &&
-                    (responseBody.find("\"MEDIUM\"") != std::string::npos || 
-                     responseBody.find("\"HIGH\"") != std::string::npos)) {
-                    category = "DANGEROUS_CONTENT";
-                } else if (responseBody.find("HARM_CATEGORY_HARASSMENT") != std::string::npos) {
-                    category = "HARASSMENT";
-                } else if (responseBody.find("HARM_CATEGORY_HATE_SPEECH") != std::string::npos) {
-                    category = "HATE_SPEECH";
-                }
-                result.error = "Response blocked by safety filter (" + category + "). "
-                              "Try setting ai.safetyThreshold to BLOCK_ONLY_HIGH or BLOCK_NONE in config.";
-            } else {
-                result.error = "No text found in response";
-            }
-            return result;
-        }
-        
-        // Extract text value
-        textStart = responseBody.find("\"", textStart + 6) + 1;
-        size_t textEnd = textStart;
-        
-        // Handle escaped quotes in the text
-        while (textEnd < responseBody.size()) {
-            if (responseBody[textEnd] == '\\') {
-                textEnd += 2; // Skip escaped character
-                continue;
-            }
-            if (responseBody[textEnd] == '"') {
-                break;
-            }
-            textEnd++;
-        }
-        
-        std::string text = responseBody.substr(textStart, textEnd - textStart);
-        
-        // Unescape the text
-        result.text = UnescapeJson(text);
-        result.success = true;
-        
-        // Try to extract token counts
-        size_t tokenPos = responseBody.find("\"promptTokenCount\"");
-        if (tokenPos != std::string::npos) {
-            size_t numStart = responseBody.find(":", tokenPos) + 1;
-            result.promptTokens = std::atoi(responseBody.c_str() + numStart);
-        }
-        
-        tokenPos = responseBody.find("\"candidatesTokenCount\"");
-        if (tokenPos != std::string::npos) {
-            size_t numStart = responseBody.find(":", tokenPos) + 1;
-            result.completionTokens = std::atoi(responseBody.c_str() + numStart);
-        }
-        
-        return result;
-    }
-    
-    /**
-     * Unescape JSON string.
-     */
-    std::string UnescapeJson(const std::string& str) const {
-        std::string result;
-        result.reserve(str.size());
-        
-        for (size_t i = 0; i < str.size(); ++i) {
-            if (str[i] == '\\' && i + 1 < str.size()) {
-                switch (str[i + 1]) {
-                    case '"':  result += '"'; ++i; break;
-                    case '\\': result += '\\'; ++i; break;
-                    case 'n':  result += '\n'; ++i; break;
-                    case 'r':  result += '\r'; ++i; break;
-                    case 't':  result += '\t'; ++i; break;
-                    case 'b':  result += '\b'; ++i; break;
-                    case 'f':  result += '\f'; ++i; break;
-                    case 'u':
-                        if (i + 5 < str.size()) {
-                            // Parse \uXXXX
-                            std::string hex = str.substr(i + 2, 4);
-                            int codepoint = std::stoi(hex, nullptr, 16);
-                            if (codepoint < 0x80) {
-                                result += static_cast<char>(codepoint);
-                            } else if (codepoint < 0x800) {
-                                result += static_cast<char>(0xC0 | (codepoint >> 6));
-                                result += static_cast<char>(0x80 | (codepoint & 0x3F));
-                            } else {
-                                result += static_cast<char>(0xE0 | (codepoint >> 12));
-                                result += static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F));
-                                result += static_cast<char>(0x80 | (codepoint & 0x3F));
-                            }
-                            i += 5;
-                        }
-                        break;
-                    default:
-                        result += str[i + 1];
-                        ++i;
-                }
-            } else {
-                result += str[i];
-            }
-        }
-        return result;
+        return GeminiProvider::parseResponse(responseBody, httpCode);
     }
     
     /**
