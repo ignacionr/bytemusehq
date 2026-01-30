@@ -1,5 +1,6 @@
 #include <wx/app.h>
 #include <wx/log.h>
+#include <wx/image.h>
 #include "ui/frame.h"
 #include "config/config.h"
 #include "theme/theme.h"
@@ -7,6 +8,9 @@
 class ByteMuseApp : public wxApp {
 public:
     bool OnInit() override {
+        // Initialize image handlers for loading PNG, JPEG, etc.
+        wxInitAllImageHandlers();
+        
         // Initialize configuration system
         Config::Instance().Load();
         

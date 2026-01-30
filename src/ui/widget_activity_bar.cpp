@@ -1,5 +1,59 @@
 #include "widget_activity_bar.h"
 #include <algorithm>
+#include <wx/filename.h>
+
+// Helper to load and colorize an image file
+static wxBitmap LoadIconWithColor(const wxString& iconPath, int size, const wxColour& color)
+{
+    // Create a bitmap to hold the icon
+    wxBitmap bitmap(size, size);
+    wxMemoryDC memDC(bitmap);
+    memDC.SetBackground(*wxTRANSPARENT_BRUSH);
+    memDC.Clear();
+    
+    // Try to load the image from file
+    wxImage img;
+    if (wxFileName::FileExists(iconPath) && img.LoadFile(iconPath)) {
+        // Scale image to desired size if needed
+        if (img.GetWidth() != size || img.GetHeight() != size) {
+            img = img.Scale(size, size, wxIMAGE_QUALITY_HIGH);
+        }
+        
+        // Colorize the image by replacing non-transparent pixels with the desired color
+        // This works well for monochrome icon templates
+        if (!img.HasAlpha()) {
+            img.InitAlpha();
+        }
+        
+        unsigned char* data = img.GetData();
+        unsigned char* alpha = img.GetAlpha();
+        int pixelCount = img.GetWidth() * img.GetHeight();
+        
+        for (int i = 0; i < pixelCount; i++) {
+            // If pixel is not fully transparent, colorize it
+            if (alpha && alpha[i] > 0) {
+                data[i * 3] = color.Red();
+                data[i * 3 + 1] = color.Green();
+                data[i * 3 + 2] = color.Blue();
+            }
+        }
+        
+        memDC.DrawBitmap(wxBitmap(img), 0, 0, true);
+    } else {
+        // File not found or couldn't load - draw a simple placeholder shape
+        wxGraphicsContext* gc = wxGraphicsContext::Create(memDC);
+        if (gc) {
+            gc->SetPen(wxPen(color, 2));
+            gc->SetBrush(*wxTRANSPARENT_BRUSH);
+            // Draw a simple square as placeholder
+            gc->DrawRectangle(4, 4, size - 8, size - 8);
+            delete gc;
+        }
+    }
+    
+    memDC.SelectObject(wxNullBitmap);
+    return bitmap;
+}
 
 // ============================================================================
 // ActivityBarButton Implementation
@@ -23,10 +77,18 @@ ActivityBarButton::ActivityBarButton(wxWindow* parent, const WidgetCategory& cat
     
     SetToolTip(category.name);
     
+    LoadIcon();
+    
     Bind(wxEVT_PAINT, &ActivityBarButton::OnPaint, this);
     Bind(wxEVT_LEFT_DOWN, &ActivityBarButton::OnMouseDown, this);
     Bind(wxEVT_ENTER_WINDOW, &ActivityBarButton::OnMouseEnter, this);
     Bind(wxEVT_LEAVE_WINDOW, &ActivityBarButton::OnMouseLeave, this);
+}
+
+void ActivityBarButton::LoadIcon()
+{
+    // Load icon with default foreground color
+    m_iconBitmap = LoadIconWithColor(m_category.icon, ICON_SIZE, m_fgColor);
 }
 
 void ActivityBarButton::SetSelected(bool selected)
@@ -60,6 +122,9 @@ void ActivityBarButton::ApplyTheme(const ThemePtr& theme)
     m_accentColor = theme->ui.accent.IsOk() ?
         theme->ui.accent : wxColour(0, 122, 204);
     
+    // Reload icon with new foreground color
+    LoadIcon();
+    
     Refresh();
 }
 
@@ -86,17 +151,17 @@ void ActivityBarButton::OnPaint(wxPaintEvent& event)
         dc.DrawRectangle(3, 2, size.x - 5, size.y - 4);
     }
     
-    // Icon
-    wxColour iconColor = m_selected ? m_selectedColor : (m_hovered ? m_hoverColor : m_fgColor);
-    dc.SetTextForeground(iconColor);
-    
-    wxFont iconFont(ICON_SIZE, wxFONTFAMILY_DEFAULT, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
-    dc.SetFont(iconFont);
-    
-    wxSize textSize = dc.GetTextExtent(m_category.icon);
-    int x = (size.x - textSize.x) / 2;
-    int y = (size.y - textSize.y) / 2;
-    dc.DrawText(m_category.icon, x, y);
+    // Icon - render the bitmap with appropriate color
+    if (m_iconBitmap.IsOk()) {
+        wxColour iconColor = m_selected ? m_selectedColor : (m_hovered ? m_hoverColor : m_fgColor);
+        
+        // Reload bitmap with current state color if needed
+        wxBitmap coloredIcon = LoadIconWithColor(m_category.icon, ICON_SIZE, iconColor);
+        
+        int x = (size.x - ICON_SIZE) / 2;
+        int y = (size.y - ICON_SIZE) / 2;
+        dc.DrawBitmap(coloredIcon, x, y, true);
+    }
     
     // Badge (if any)
     if (m_badgeCount > 0) {

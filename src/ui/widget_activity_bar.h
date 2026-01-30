@@ -3,6 +3,8 @@
 
 #include <wx/wx.h>
 #include <wx/dcbuffer.h>
+#include <wx/graphics.h>
+#include <wx/dcgraph.h>
 #include <vector>
 #include <map>
 #include <set>
@@ -36,12 +38,15 @@ private:
     bool m_hovered;
     int m_badgeCount;
     
+    wxBitmap m_iconBitmap;  // Cached icon bitmap
+    
     wxColour m_bgColor;
     wxColour m_fgColor;
     wxColour m_selectedColor;
     wxColour m_hoverColor;
     wxColour m_accentColor;
     
+    void LoadIcon();
     void OnPaint(wxPaintEvent& event);
     void OnMouseDown(wxMouseEvent& event);
     void OnMouseEnter(wxMouseEvent& event);
