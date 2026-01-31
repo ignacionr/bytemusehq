@@ -7,9 +7,9 @@
 #include "../theme/theme.h"
 #include "../config/config.h"
 #include <wx/treectrl.h>
+#include <wx/textctrl.h>
 #include <wx/dir.h>
 #include <wx/filename.h>
-#include <wx/srchctrl.h>
 #include <memory>
 #include <set>
 
@@ -84,10 +84,10 @@ public:
         headerPanel->SetSizer(headerSizer);
         mainSizer->Add(headerPanel, 0, wxEXPAND);
         
-        // Search box
-        m_searchCtrl = new wxSearchCtrl(m_panel, wxID_ANY, "", 
+        // Search box - using wxTextCtrl for better color control
+        m_searchCtrl = new wxTextCtrl(m_panel, wxID_ANY, "", 
             wxDefaultPosition, wxDefaultSize, wxTE_PROCESS_ENTER);
-        m_searchCtrl->SetDescriptiveText("Search symbols...");
+        m_searchCtrl->SetHint("Search symbols...");
         mainSizer->Add(m_searchCtrl, 0, wxEXPAND | wxALL, 4);
         
         // Status label
@@ -114,7 +114,6 @@ public:
         m_treeCtrl->Bind(wxEVT_TREE_ITEM_ACTIVATED, &SymbolsWidget::OnItemActivated, this);
         m_refreshButton->Bind(wxEVT_BUTTON, &SymbolsWidget::OnRefreshClicked, this);
         m_searchCtrl->Bind(wxEVT_TEXT, &SymbolsWidget::OnSearchTextChanged, this);
-        m_searchCtrl->Bind(wxEVT_SEARCHCTRL_SEARCH_BTN, &SymbolsWidget::OnSearch, this);
         m_searchCtrl->Bind(wxEVT_TEXT_ENTER, &SymbolsWidget::OnSearch, this);
         
         // Initialize LSP and start indexing
@@ -137,6 +136,7 @@ public:
         m_titleLabel->SetForegroundColour(theme->ui.sidebarForeground);
         m_statusLabel->SetForegroundColour(theme->ui.sidebarForeground);
         
+        // Set colors for search control
         m_searchCtrl->SetBackgroundColour(theme->palette.inputBackground);
         m_searchCtrl->SetForegroundColour(theme->palette.inputForeground);
         
@@ -289,7 +289,7 @@ private:
     wxStaticText* m_titleLabel = nullptr;
     wxStaticText* m_statusLabel = nullptr;
     wxButton* m_refreshButton = nullptr;
-    wxSearchCtrl* m_searchCtrl = nullptr;
+    wxTextCtrl* m_searchCtrl = nullptr;
     WidgetContext* m_context = nullptr;
     
     std::unique_ptr<LspClient> m_lspClient;
