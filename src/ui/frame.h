@@ -63,6 +63,10 @@ public:
     // Widget system access
     WidgetContext& GetWidgetContext() { return m_widgetContext; }
     void NotifyThemeChanged();
+    
+    // Remote connection status
+    bool IsConnectedToRemote() const;
+    wxString GetRemoteHostInfo() const;
 
 private:
     wxTreeCtrl* m_treeCtrl;
@@ -76,8 +80,10 @@ private:
     wxPanel* m_leftContentPanel;       // Tree control area
     WidgetActivityBar* m_activityBar;  // Activity bar with category buttons
     WidgetBar* m_widgetBar;            // Widget bar for sidebar widgets
+    wxStatusBar* m_statusBar;          // Status bar for remote connection status
     wxString m_currentCategory;        // Currently selected category ID
     int m_themeListenerId;
+    int m_configListenerId;            // Config change listener for SSH settings
     WidgetContext m_widgetContext;
     
     void SetupUI();
@@ -92,6 +98,7 @@ private:
     void RegisterWidgets();
     void PopulateTree(const wxTreeItemId& parentItem);
     void UpdateTitle();
+    void UpdateStatusBar();            // Update status bar with connection info
     
     FS::Filesystem m_filesystem;       // Unified filesystem access (local or remote)
     

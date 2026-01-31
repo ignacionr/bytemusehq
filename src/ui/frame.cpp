@@ -41,6 +41,7 @@ wxEND_EVENT_TABLE()
 MainFrame::MainFrame()
     : wxFrame(nullptr, wxID_ANY, "ByteMuseHQ", wxDefaultPosition, wxSize(1000, 600))
     , m_themeListenerId(0)
+    , m_configListenerId(0)
 {
     RegisterCommands();
     RegisterWidgets();
@@ -52,12 +53,20 @@ MainFrame::MainFrame()
     ApplyCurrentTheme();
     NotifyThemeChanged();   // Apply theme to widgets
     UpdateTitle();
+    UpdateStatusBar();
     
     // Listen for theme changes
     m_themeListenerId = ThemeManager::Instance().AddChangeListener(
         [this](const ThemePtr& theme) {
             ApplyTheme(theme);
             NotifyThemeChanged();
+        });
+    
+    // Listen for SSH config changes
+    m_configListenerId = Config::Instance().AddNamespaceListener("ssh",
+        [this](const wxString& key, const ConfigValue& value) {
+            UpdateStatusBar();
+            UpdateTitle();
         });
 }
 
@@ -66,10 +75,17 @@ MainFrame::~MainFrame()
     if (m_themeListenerId > 0) {
         ThemeManager::Instance().RemoveChangeListener(m_themeListenerId);
     }
+    if (m_configListenerId > 0) {
+        Config::Instance().RemoveListener(m_configListenerId);
+    }
 }
 
 void MainFrame::SetupUI()
 {
+    // Create status bar first
+    m_statusBar = CreateStatusBar(1);
+    m_statusBar->SetStatusText("Local");
+    
     // Create main panel and sizer
     m_mainPanel = new wxPanel(this);
     wxBoxSizer* mainSizer = new wxBoxSizer(wxHORIZONTAL);
@@ -243,6 +259,12 @@ void MainFrame::SetupMenuBar()
 void MainFrame::UpdateTitle()
 {
     wxString title = "ByteMuseHQ";
+    
+    // Add remote connection info to title if connected
+    if (IsConnectedToRemote()) {
+        title += " [" + GetRemoteHostInfo() + "]";
+    }
+    
     if (m_editor) {
         wxString fileTitle = m_editor->GetTitle();
         if (!fileTitle.IsEmpty() && fileTitle != "Untitled") {
@@ -252,6 +274,35 @@ void MainFrame::UpdateTitle()
         }
     }
     SetTitle(title);
+}
+
+void MainFrame::UpdateStatusBar()
+{
+    if (!m_statusBar) return;
+    
+    if (IsConnectedToRemote()) {
+        m_statusBar->SetStatusText("🌐 Remote: " + GetRemoteHostInfo());
+    } else {
+        m_statusBar->SetStatusText("📁 Local");
+    }
+}
+
+bool MainFrame::IsConnectedToRemote() const
+{
+    auto& config = Config::Instance();
+    return config.GetBool("ssh.enabled", false);
+}
+
+wxString MainFrame::GetRemoteHostInfo() const
+{
+    auto& config = Config::Instance();
+    wxString host = config.GetString("ssh.host", "");
+    wxString user = config.GetString("ssh.user", "");
+    
+    if (user.IsEmpty()) {
+        return host;
+    }
+    return user + "@" + host;
 }
 
 void MainFrame::PopulateTree(const wxTreeItemId& parentItem)
@@ -695,8 +746,9 @@ void MainFrame::OpenFolder(const wxString& path, bool isRemote)
     PopulateTree(rootId);
     m_treeCtrl->Expand(rootId);
     
-    // Update the window title to reflect the change
+    // Update the window title and status bar to reflect the change
     UpdateTitle();
+    UpdateStatusBar();
 }
 
 
