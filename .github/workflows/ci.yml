@@ -65,7 +65,7 @@ jobs:
 
     - name: Install glaze (header-only JSON library)
       run: |
-        git clone --depth 1 --branch v4.2.3 https://github.com/stephenberry/glaze.git glaze-src
+        git clone --depth 1 --branch v4.3.3 https://github.com/stephenberry/glaze.git glaze-src
         cd glaze-src
         cmake -B build -S . -G "Visual Studio 17 2022" -A x64 `
           -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}\glaze-install" `
@@ -162,7 +162,7 @@ jobs:
 
     - name: Install glaze (header-only JSON library)
       run: |
-        git clone --depth 1 --branch v4.2.3 https://github.com/stephenberry/glaze.git glaze-src
+        git clone --depth 1 --branch v4.3.3 https://github.com/stephenberry/glaze.git glaze-src
         cd glaze-src
         cmake -B build -S . -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/glaze-install -Dglaze_DEVELOPER_MODE=OFF
         cmake --install build
