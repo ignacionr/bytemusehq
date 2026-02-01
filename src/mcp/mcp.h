@@ -396,6 +396,37 @@ public:
         json += "]}]";
         return json;
     }
+    
+    /**
+     * Generate a human-readable description of available tools for the system instruction.
+     * Groups tools by provider and lists them with their descriptions.
+     */
+    std::string generateToolsDescription() const {
+        auto providers = getEnabledProviders();
+        if (providers.empty()) return "";
+        
+        std::string description = "You have access to the user's workspace through several tools:\n\n";
+        
+        for (const auto& provider : providers) {
+            auto tools = provider->getTools();
+            if (tools.empty()) continue;
+            
+            // Provider header
+            description += provider->getName() + " TOOLS:\n";
+            
+            // List each tool
+            for (const auto& tool : tools) {
+                description += "- " + tool.name + ": " + tool.description + "\n";
+            }
+            description += "\n";
+        }
+        
+        description += "When the user asks about their code, project structure, or file contents, "
+                      "USE THESE TOOLS to read and explore their files. Don't say you can't access files - you can! "
+                      "When the user asks you to run commands, build code, or execute scripts, use the terminal tools.";
+        
+        return description;
+    }
 
 private:
     Registry() = default;

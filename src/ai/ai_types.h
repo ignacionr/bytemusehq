@@ -94,7 +94,7 @@ struct AIConfig {
     int maxOutputTokens = 2048;
     float topP = 0.95f;
     int topK = 40;
-    std::string systemInstruction;
+    std::string systemInstruction {"You are a helpful assistant."};
     
     // MCP/Function calling settings
     bool enableMCP = true;      // Enable MCP tool calling

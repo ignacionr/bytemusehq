@@ -568,6 +568,61 @@ public:
 };
 ```
 
+Once created, register your provider:
+
+```cpp
+auto myProvider = std::make_shared<MyProvider>();
+MCP::Registry::Instance().registerProvider(myProvider);
+```
+
+### Dynamic System Instruction
+
+**Important:** The AI system instruction is now generated dynamically from registered MCP providers!
+
+When you register a new MCP provider, its tools are automatically:
+1. **Included in the function calling schema** sent to the AI API
+2. **Described in the system instruction** that tells the AI about available tools
+
+This means you don't need to manually update the `ai.systemInstruction` config every time you add new MCP providers or tools. The system automatically discovers all registered providers via `MCP::Registry::Instance().generateToolsDescription()`.
+
+#### How It Works
+
+```cpp
+// 1. Register your MCP providers (done in InitializeMCP)
+MCP::Registry::Instance().registerProvider(fsProvider);
+MCP::Registry::Instance().registerProvider(termProvider);
+MCP::Registry::Instance().registerProvider(codeIndexProvider);
+
+// 2. Generate dynamic system instruction
+std::string baseInstruction = "You are a helpful AI assistant...";
+std::string toolsDescription = MCP::Registry::Instance().generateToolsDescription();
+std::string fullInstruction = baseInstruction + toolsDescription;
+
+// 3. Set the instruction (this overrides config-based instruction)
+AI::GeminiClient::Instance().SetSystemInstruction(fullInstruction);
+```
+
+#### Customizing the Base Instruction
+
+The config file still supports `ai.systemInstruction`, but it serves as a **base** that gets loaded first:
+
+```json
+{
+  "ai.systemInstruction": "You are an expert C++ assistant with deep knowledge of modern C++ best practices."
+}
+```
+
+This base instruction is then extended with the dynamically generated tools description when `InitializeMCP()` is called. If you want to completely control the system instruction without MCP tools being added automatically, you can call `SetSystemInstruction()` after `InitializeMCP()`.
+
+#### Benefits
+
+- ✅ **Automatic tool discovery** - New MCP providers are automatically documented
+- ✅ **No config updates needed** - Extending MCPs doesn't require updating every user's config
+- ✅ **Consistent documentation** - Tool descriptions come directly from the source
+- ✅ **Easier maintenance** - One source of truth for tool definitions
+
+
+
 ---
 
 ## AI Integration

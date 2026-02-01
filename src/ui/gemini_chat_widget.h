@@ -1189,39 +1189,23 @@ private:
         // Enable MCP in Gemini client
         AI::GeminiClient::Instance().SetMCPEnabled(true);
         
-        // Set system instruction to inform the AI about available tools
+        // Generate system instruction dynamically from registered MCP providers
         std::string locationInfo = sshEnabled 
             ? "Remote workspace via SSH: " + config.GetString("ssh.host", "").ToStdString() + ":" + workDir
             : "Local workspace: " + workDir;
-            
+        
+        // Build the base instruction
         std::string systemInstruction = 
-            "You are a helpful AI assistant integrated into a code editor. "
-            "You have access to the user's workspace files, terminal, and code index through several tools:\n\n"
-            "FILESYSTEM TOOLS:\n"
-            "- fs_list_directory: List files and folders in a directory\n"
-            "- fs_read_file: Read the complete contents of a file\n"
-            "- fs_read_file_lines: Read specific line ranges from a file\n"
-            "- fs_get_file_info: Get metadata about a file (size, type, line count)\n"
-            "- fs_search_files: Search for files by name pattern (e.g., '*.cpp')\n"
-            "- fs_grep: Search for text content within files\n\n"
-            "TERMINAL TOOLS:\n"
-            "- terminal_execute: Execute shell commands (build, run scripts, git, etc.)\n"
-            "- terminal_get_shell_info: Get info about the current shell environment\n"
-            "- terminal_get_env: Get environment variable values\n"
-            "- terminal_which: Find the path of an executable\n"
-            "- terminal_list_processes: List running processes\n\n"
-            "CODE INDEX TOOLS (powered by clangd):\n"
-            "- code_search_symbols: Search for functions, classes, variables by name\n"
-            "- code_list_file_symbols: List all symbols defined in a specific file\n"
-            "- code_list_functions: List all functions/methods in the workspace\n"
-            "- code_list_classes: List all classes and structs in the workspace\n"
-            "- code_get_index_status: Check if code indexing is complete\n\n"
-            "When the user asks about their code, project structure, or file contents, "
-            "USE THESE TOOLS to read and explore their files. Don't say you can't access files - you can! "
-            "When the user asks about code structure, functions, or classes, use the code index tools first "
-            "for faster and more accurate results. "
-            "When the user asks you to run commands, build code, or execute scripts, use the terminal tools.\n\n"
-            + locationInfo;
+            "You are a helpful AI assistant integrated into a code editor. ";
+        
+        // Add dynamically generated tools description from MCP registry
+        std::string toolsDescription = MCP::Registry::Instance().generateToolsDescription();
+        if (!toolsDescription.empty()) {
+            systemInstruction += toolsDescription;
+        }
+        
+        // Add location info
+        systemInstruction += "\n\n" + locationInfo;
         
         AI::GeminiClient::Instance().SetSystemInstruction(systemInstruction);
         
