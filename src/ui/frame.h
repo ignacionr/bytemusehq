@@ -89,6 +89,10 @@ private:
     int m_configListenerId;            // Config change listener for SSH settings
     WidgetContext m_widgetContext;
     
+    // Dynamic command accelerator support
+    std::map<int, wxString> m_commandIdToName;  // Map wxEventId -> command ID
+    int m_nextCommandId;                         // Next available command event ID
+    
     void SetupUI();
     void SetupActivityBar();           // Initialize the activity bar with categories
     void SetupSidebarWidgets();
@@ -124,6 +128,7 @@ private:
     void OnSaveAs(wxCommandEvent& event);
     void OnClose(wxCloseEvent& event);
     void OnToggleTerminal(wxCommandEvent& event);
+    void OnCommandAccelerator(wxCommandEvent& event);  // Generic handler for command accelerators
     
     wxDECLARE_EVENT_TABLE();
 };

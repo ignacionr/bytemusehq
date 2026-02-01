@@ -43,6 +43,7 @@ MainFrame::MainFrame()
     : wxFrame(nullptr, wxID_ANY, "ByteMuseHQ", wxDefaultPosition, wxSize(1000, 600))
     , m_themeListenerId(0)
     , m_configListenerId(0)
+    , m_nextCommandId(wxID_HIGHEST + 1000)  // Start from a safe ID range
 {
     RegisterCommands();
     RegisterWidgets();
@@ -602,11 +603,85 @@ void MainFrame::NotifyThemeChanged()
 
 void MainFrame::SetupAccelerators()
 {
-    // Set up keyboard shortcuts
-    wxAcceleratorEntry entries[2];
-    entries[0].Set(wxACCEL_CTRL | wxACCEL_SHIFT, 'P', ID_COMMAND_PALETTE);
-    entries[1].Set(wxACCEL_CTRL, '`', ID_TOGGLE_TERMINAL);
-    wxAcceleratorTable accel(2, entries);
+    // Build accelerator table dynamically from all registered commands
+    std::vector<wxAcceleratorEntry> entries;
+    
+    // Add hardcoded essential shortcuts
+    entries.push_back(wxAcceleratorEntry(wxACCEL_CTRL | wxACCEL_SHIFT, 'P', ID_COMMAND_PALETTE));
+    entries.push_back(wxAcceleratorEntry(wxACCEL_CTRL, '`', ID_TOGGLE_TERMINAL));
+    
+    // Add all registered commands with shortcuts
+    auto& registry = CommandRegistry::Instance();
+    auto allCommands = registry.GetAllCommands();
+    
+    for (const auto& cmd : allCommands) {
+        const wxString& shortcut = cmd->GetShortcut();
+        if (shortcut.IsEmpty()) continue;
+        
+        // Parse the shortcut string (e.g., "Ctrl+F", "Ctrl+Shift+P")
+        int flags = 0;
+        wxChar keyCode = 0;
+        
+        wxArrayString parts = wxSplit(shortcut, '+');
+        for (size_t i = 0; i < parts.size(); ++i) {
+            wxString part = parts[i].Upper();
+            
+            if (part == "CTRL" || part == "CMD") {
+                flags |= wxACCEL_CTRL;
+            } else if (part == "SHIFT") {
+                flags |= wxACCEL_SHIFT;
+            } else if (part == "ALT") {
+                flags |= wxACCEL_ALT;
+            } else if (i == parts.size() - 1) {
+                // Last part is the key
+                if (part.Length() == 1) {
+                    keyCode = part[0];
+                } else {
+                    // Handle special keys
+                    if (part == "F1") keyCode = WXK_F1;
+                    else if (part == "F2") keyCode = WXK_F2;
+                    else if (part == "F3") keyCode = WXK_F3;
+                    else if (part == "F4") keyCode = WXK_F4;
+                    else if (part == "F5") keyCode = WXK_F5;
+                    else if (part == "F6") keyCode = WXK_F6;
+                    else if (part == "F7") keyCode = WXK_F7;
+                    else if (part == "F8") keyCode = WXK_F8;
+                    else if (part == "F9") keyCode = WXK_F9;
+                    else if (part == "F10") keyCode = WXK_F10;
+                    else if (part == "F11") keyCode = WXK_F11;
+                    else if (part == "F12") keyCode = WXK_F12;
+                    else if (part == "ENTER" || part == "RETURN") keyCode = WXK_RETURN;
+                    else if (part == "TAB") keyCode = WXK_TAB;
+                    else if (part == "ESC" || part == "ESCAPE") keyCode = WXK_ESCAPE;
+                    else if (part == "DELETE" || part == "DEL") keyCode = WXK_DELETE;
+                    else if (part == "BACKSPACE") keyCode = WXK_BACK;
+                    else if (part == "INSERT" || part == "INS") keyCode = WXK_INSERT;
+                    else if (part == "HOME") keyCode = WXK_HOME;
+                    else if (part == "END") keyCode = WXK_END;
+                    else if (part == "PAGEUP") keyCode = WXK_PAGEUP;
+                    else if (part == "PAGEDOWN") keyCode = WXK_PAGEDOWN;
+                    else if (part == "LEFT") keyCode = WXK_LEFT;
+                    else if (part == "RIGHT") keyCode = WXK_RIGHT;
+                    else if (part == "UP") keyCode = WXK_UP;
+                    else if (part == "DOWN") keyCode = WXK_DOWN;
+                }
+            }
+        }
+        
+        if (keyCode != 0) {
+            // Allocate a unique event ID for this command
+            int eventId = m_nextCommandId++;
+            m_commandIdToName[eventId] = cmd->GetId();
+            
+            entries.push_back(wxAcceleratorEntry(flags, keyCode, eventId));
+            
+            // Bind the event handler for this command
+            Bind(wxEVT_MENU, &MainFrame::OnCommandAccelerator, this, eventId);
+        }
+    }
+    
+    // Set the accelerator table
+    wxAcceleratorTable accel(entries.size(), entries.data());
     SetAcceleratorTable(accel);
 }
 
@@ -768,6 +843,30 @@ void MainFrame::OpenFolder(const wxString& path, bool isRemote)
     
     // Reinitialize MCP providers with the new SSH configuration
     ReinitializeMCPProviders();
+}
+
+void MainFrame::OnCommandAccelerator(wxCommandEvent& event)
+{
+    // Look up which command this event ID corresponds to
+    int eventId = event.GetId();
+    auto it = m_commandIdToName.find(eventId);
+    
+    if (it == m_commandIdToName.end()) {
+        return;  // Unknown command ID
+    }
+    
+    const wxString& commandId = it->second;
+    
+    // Get the command from the registry and execute it
+    auto& registry = CommandRegistry::Instance();
+    auto cmd = registry.GetCommand(commandId);
+    
+    if (cmd) {
+        CommandContext ctx = CreateCommandContext();
+        if (cmd->IsEnabled(ctx)) {
+            cmd->Execute(ctx);
+        }
+    }
 }
 
 

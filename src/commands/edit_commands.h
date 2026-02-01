@@ -112,9 +112,18 @@ inline void Register() {
             wxTextEntryDialog dlg(window, "Find:", "Find");
             if (dlg.ShowModal() == wxID_OK) {
                 wxString searchText = dlg.GetValue();
-                int pos = editor->FindText(editor->GetCurrentPos(), 
+                int currentPos = editor->GetCurrentPos();
+                
+                // Try to find from current position to end
+                int pos = editor->FindText(currentPos, 
                                           editor->GetLength(),
                                           searchText);
+                
+                // If not found, wrap around and search from beginning to current position
+                if (pos == wxNOT_FOUND && currentPos > 0) {
+                    pos = editor->FindText(0, currentPos, searchText);
+                }
+                
                 if (pos != wxNOT_FOUND) {
                     editor->GotoPos(pos);
                     editor->SetSelection(pos, pos + searchText.Length());
