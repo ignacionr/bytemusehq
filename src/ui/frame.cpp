@@ -12,6 +12,7 @@
 #include "../mcp/mcp_code_index.h"
 #include "../fs/fs.h"
 #include "builtin_widgets.h"
+#include "gemini_chat_widget.h"
 #include "widget_bar.h"
 #include "widget_activity_bar.h"
 #include "symbols_widget.h"
@@ -303,6 +304,21 @@ wxString MainFrame::GetRemoteHostInfo() const
         return host;
     }
     return user + "@" + host;
+}
+
+void MainFrame::ReinitializeMCPProviders()
+{
+    // Get the GeminiChatWidget from the registry
+    auto& widgetRegistry = WidgetRegistry::Instance();
+    auto widget = widgetRegistry.GetWidget("core.geminiChat");
+    
+    if (widget) {
+        // Cast to GeminiChatWidget to access the reinitialize method
+        auto* geminiWidget = dynamic_cast<BuiltinWidgets::GeminiChatWidget*>(widget.get());
+        if (geminiWidget) {
+            geminiWidget->ReinitializeMCPProviders();
+        }
+    }
 }
 
 void MainFrame::PopulateTree(const wxTreeItemId& parentItem)
@@ -749,6 +765,9 @@ void MainFrame::OpenFolder(const wxString& path, bool isRemote)
     // Update the window title and status bar to reflect the change
     UpdateTitle();
     UpdateStatusBar();
+    
+    // Reinitialize MCP providers with the new SSH configuration
+    ReinitializeMCPProviders();
 }
 
 

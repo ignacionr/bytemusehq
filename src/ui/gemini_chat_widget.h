@@ -1070,6 +1070,14 @@ public:
         wxString configDir = config.GetConfigDir();
         wxLaunchDefaultApplication(configDir);
     }
+    
+    /**
+     * Reinitialize MCP providers with current SSH configuration.
+     * Call this when SSH connection state changes.
+     */
+    void ReinitializeMCPProviders() {
+        InitializeMCP();
+    }
 
 private:
     wxPanel* m_panel = nullptr;

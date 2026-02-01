@@ -67,6 +67,9 @@ public:
     // Remote connection status
     bool IsConnectedToRemote() const;
     wxString GetRemoteHostInfo() const;
+    
+    // MCP provider management
+    void ReinitializeMCPProviders();
 
 private:
     wxTreeCtrl* m_treeCtrl;
