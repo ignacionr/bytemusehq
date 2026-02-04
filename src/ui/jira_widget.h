@@ -6,7 +6,7 @@
 #include "../config/config.h"
 #include "../commands/command.h"
 #include "../commands/command_registry.h"
-#include "../http/http_client.h"
+#include "../jira/jira_client.h"
 #include <wx/dcbuffer.h>
 #include <wx/timer.h>
 #include <wx/listctrl.h>
@@ -16,10 +16,6 @@
 #include <wx/choice.h>
 #include <wx/textctrl.h>
 #include <wx/mimetype.h>
-#include <wx/base64.h>
-#include <wx/uri.h>
-
-#include <glaze/glaze.hpp>
 
 #include <thread>
 #include <mutex>
@@ -31,55 +27,8 @@ class MainFrame;
 namespace BuiltinWidgets {
 
 /**
- * JIRA API response structures for Glaze JSON parsing.
- * These map to the JIRA REST API v2/v3 response format.
- */
-namespace JiraApi {
-    struct NamedField {
-        std::string name;
-    };
-    
-    struct User {
-        std::string displayName;
-        std::string accountId;  // API v3
-        std::string key;        // API v2 (legacy)
-    };
-    
-    struct IssueFields {
-        std::string summary;
-        std::string updated;
-        std::optional<NamedField> status;
-        std::optional<NamedField> priority;
-        std::optional<NamedField> issuetype;
-        std::optional<User> assignee;
-    };
-    
-    struct Issue {
-        std::string id;
-        std::string key;
-        IssueFields fields;
-    };
-    
-    struct SearchResponse {
-        int total = 0;
-        int maxResults = 0;
-        std::vector<Issue> issues;
-    };
-    
-    struct ErrorResponse {
-        std::vector<std::string> errorMessages;
-        std::string message;  // Single error message (used by some endpoints)
-    };
-    
-    struct CreateIssueResponse {
-        std::string id;
-        std::string key;
-        std::string self;
-    };
-} // namespace JiraApi
-
-/**
- * JIRA issue structure for display.
+ * JIRA issue structure for display (UI-specific with wxString).
+ * This wraps the Jira::Issue for wxWidgets UI use.
  */
 struct JiraIssue {
     wxString key;           // e.g., "PROJ-123"
@@ -596,165 +545,29 @@ private:
     wxColour m_bgColor = wxColour(30, 30, 30);
     wxColour m_fgColor = wxColour(220, 220, 220);
     
-    wxString m_jiraUrl;
-    wxString m_jiraUser;
-    wxString m_jiraToken;
     wxString m_jiraProject;
-    wxString m_jiraApiVersion;  // "2" for Jira Server, "3" for Jira Cloud
     
     std::vector<JiraIssue> m_issues;
     std::atomic<bool> m_loading{false};
     wxTimer m_refreshTimer;
     
-    // Result structure for API calls with status info
-    struct JiraApiResult {
-        std::string response;
-        long httpCode = 0;
-        wxString error;
-        bool success = false;
-    };
+    // Jira client
+    Jira::Client m_jiraClient;
     
-    // Make HTTP request to JIRA API using the platform HTTP client
-    JiraApiResult MakeJiraRequest(const wxString& endpoint, const wxString& method = "GET", 
-                                 const wxString& postData = "") {
-        JiraApiResult result;
-        
-        Http::HttpClient& client = Http::getHttpClient();
-        if (!client.isAvailable()) {
-            result.error = wxString::Format("HTTP client (%s) not available", client.backendName());
-            return result;
-        }
-        
-        wxString url = m_jiraUrl + endpoint;
-        wxString auth = m_jiraUser + ":" + m_jiraToken;
-        wxString authEncoded = wxBase64Encode(auth.ToUTF8().data(), auth.ToUTF8().length());
-        
-        // Log the request (without sensitive auth header)
-        wxLogDebug("JIRA API Request: %s %s (via %s)", method, url, client.backendName());
-        
-        // Build HTTP request
-        Http::HttpRequest req;
-        req.url = std::string(url.ToUTF8().data());
-        req.method = std::string(method.ToUTF8().data());
-        req.headers["Authorization"] = "Basic " + std::string(authEncoded.ToUTF8().data());
-        req.headers["Content-Type"] = "application/json";
-        req.headers["Accept"] = "application/json";
-        req.timeoutSeconds = 30;
-        
-        if (method == "POST" && !postData.IsEmpty()) {
-            req.body = std::string(postData.ToUTF8().data());
-        }
-        
-        Http::HttpResponse httpResult = client.perform(req);
-        
-        result.response = httpResult.body;
-        result.httpCode = httpResult.statusCode;
-        result.success = httpResult.success;
-        
-        if (!httpResult.error.empty()) {
-            result.error = wxString::FromUTF8(httpResult.error.c_str());
-            wxLogError("JIRA API HTTP Error: %s", result.error);
-            return result;
-        }
-        
-        wxLogDebug("JIRA API Response: HTTP %ld, %zu bytes", result.httpCode, result.response.size());
-        
-        // Log response body for errors (truncated)
-        if (result.httpCode >= 400) {
-            wxString responsePreview = wxString::FromUTF8(result.response.substr(0, 500).c_str());
-            wxLogWarning("JIRA API Error Response (HTTP %ld): %s", result.httpCode, responsePreview);
-        }
-        
-        return result;
-    }
-    
-    // Get human-readable error message for HTTP status codes
-    wxString GetHttpErrorMessage(long httpCode, const std::string& response) {
-        switch (httpCode) {
-            case 401:
-                return wxT("Authentication failed (401)\n\n"
-                          "Please check:\n"
-                          "• jira.user is your email address\n"
-                          "• jira.apiToken is a valid API token\n\n"
-                          "Get a new token at:\n"
-                          "id.atlassian.com/manage-profile/security/api-tokens");
-            case 403:
-                return wxT("Access forbidden (403)\n\n"
-                          "Your account may not have permission to access this resource.");
-            case 404:
-                return wxT("Not found (404)\n\n"
-                          "Please check jira.apiUrl is correct:\n") + m_jiraUrl;
-            case 429:
-                return wxT("Rate limited (429)\n\n"
-                          "Too many requests. Please wait a moment and try again.");
-            case 500:
-            case 502:
-            case 503:
-                return wxString::Format("JIRA server error (%ld)\n\nPlease try again later.", httpCode);
-            default:
-                if (httpCode >= 400) {
-                    // Try to extract error message from response using Glaze
-                    JiraApi::ErrorResponse errResp;
-                    auto ec = glz::read<glz::opts{.error_on_unknown_keys = false}>(errResp, response);
-                    if (!ec) {
-                        if (!errResp.message.empty()) {
-                            return wxString::Format("Error (%ld): %s", httpCode, 
-                                wxString::FromUTF8(errResp.message.c_str()));
-                        }
-                        if (!errResp.errorMessages.empty()) {
-                            return wxString::Format("Error (%ld): %s", httpCode, 
-                                wxString::FromUTF8(errResp.errorMessages[0].c_str()));
-                        }
-                    }
-                    return wxString::Format("HTTP Error %ld", httpCode);
-                }
-                return "";
-        }
-    }
-    
-    // Parse JIRA API response into issues using Glaze
-    std::vector<JiraIssue> ParseJiraResponse(const std::string& json) {
-        std::vector<JiraIssue> issues;
-        
-        JiraApi::SearchResponse searchResp;
-        // Use error_on_unknown_keys=false since JIRA returns many fields we don't need
-        auto ec = glz::read<glz::opts{.error_on_unknown_keys = false}>(searchResp, json);
-        if (ec) {
-            wxLogError("Failed to parse JIRA response: %s", 
-                wxString::FromUTF8(glz::format_error(ec, json).c_str()));
-            return issues;
-        }
-        
-        for (const auto& apiIssue : searchResp.issues) {
-            JiraIssue issue;
-            issue.key = wxString::FromUTF8(apiIssue.key.c_str());
-            issue.summary = wxString::FromUTF8(apiIssue.fields.summary.c_str());
-            
-            if (apiIssue.fields.status) {
-                issue.status = wxString::FromUTF8(apiIssue.fields.status->name.c_str());
-            }
-            if (apiIssue.fields.priority) {
-                issue.priority = wxString::FromUTF8(apiIssue.fields.priority->name.c_str());
-            }
-            if (apiIssue.fields.issuetype) {
-                issue.type = wxString::FromUTF8(apiIssue.fields.issuetype->name.c_str());
-            }
-            if (apiIssue.fields.assignee) {
-                issue.assignee = wxString::FromUTF8(apiIssue.fields.assignee->displayName.c_str());
-            }
-            
-            if (!apiIssue.fields.updated.empty()) {
-                issue.updated = FormatRelativeTime(wxString::FromUTF8(apiIssue.fields.updated.c_str()));
-            }
-            
-            issue.url = m_jiraUrl + "/browse/" + issue.key;
-            
-            if (!issue.key.IsEmpty()) {
-                issues.push_back(issue);
-            }
-        }
-        
-        return issues;
+    /**
+     * Convert Jira::Issue to JiraIssue (wxString-based for UI).
+     */
+    JiraIssue ConvertIssue(const Jira::Issue& issue) {
+        JiraIssue uiIssue;
+        uiIssue.key = wxString::FromUTF8(issue.key.c_str());
+        uiIssue.summary = wxString::FromUTF8(issue.summary.c_str());
+        uiIssue.status = wxString::FromUTF8(issue.status.c_str());
+        uiIssue.priority = wxString::FromUTF8(issue.priority.c_str());
+        uiIssue.type = wxString::FromUTF8(issue.type.c_str());
+        uiIssue.assignee = wxString::FromUTF8(issue.assignee.c_str());
+        uiIssue.updated = FormatRelativeTime(wxString::FromUTF8(issue.updated.c_str()));
+        uiIssue.url = wxString::FromUTF8(issue.url.c_str());
+        return uiIssue;
     }
     
     wxString FormatRelativeTime(const wxString& isoTime) {
@@ -780,19 +593,17 @@ private:
     }
     
     void LoadConfig() {
-        auto& config = Config::Instance();
-        m_jiraUrl = config.GetString("jira.apiUrl", "");
-        m_jiraUser = config.GetString("jira.user", "");
-        m_jiraToken = config.GetString("jira.apiToken", "");
-        m_jiraProject = config.GetString("jira.defaultProject", "");
-        m_jiraApiVersion = config.GetString("jira.apiVersion", "2");  // Default to v2 for Jira Server compatibility
+        // Load config and update client
+        auto config = Jira::ClientConfig::LoadFromConfig();
+        m_jiraClient.SetConfig(config);
+        m_jiraProject = wxString::FromUTF8(config.defaultProject.c_str());
         
         // Update status label
-        if (m_jiraUser.IsEmpty() || m_jiraToken.IsEmpty() || m_jiraUrl.IsEmpty()) {
+        if (!m_jiraClient.IsConfigured()) {
             m_statusLabel->SetLabel(wxT("\u26A0 Configure jira.apiUrl, jira.user, jira.apiToken"));
             m_statusLabel->SetForegroundColour(wxColour(241, 196, 15)); // Yellow warning
         } else {
-            m_statusLabel->SetLabel(wxString::Format(wxT("\u2713 %s"), m_jiraUser));
+            m_statusLabel->SetLabel(wxString::Format(wxT("\u2713 %s"), wxString::FromUTF8(config.user.c_str())));
             m_statusLabel->SetForegroundColour(wxColour(46, 204, 113)); // Green
         }
         
@@ -805,7 +616,7 @@ private:
     }
     
     void FetchIssuesFromApi() {
-        if (m_jiraUser.IsEmpty() || m_jiraToken.IsEmpty() || m_jiraUrl.IsEmpty()) {
+        if (!m_jiraClient.IsConfigured()) {
             // Show configuration message
             wxTheApp->CallAfter([this]() {
                 m_issuesSizer->Clear(true);
@@ -837,43 +648,26 @@ private:
             m_statusLabel->SetForegroundColour(wxColour(52, 152, 219)); // Blue
         });
         
+        // Copy client to capture for thread (it's safe to copy)
+        Jira::Client client = m_jiraClient;
+        
         // Fetch in background thread
-        std::thread([this]() {
-            // JQL to get issues assigned to current user
-            // API v2 (Jira Server): GET /rest/api/2/search?jql=...
-            // API v3 (Jira Cloud):  POST /rest/api/3/search/jql with JSON body
-            JiraApiResult result;
-            
-            if (m_jiraApiVersion == "3") {
-                // API v3 uses POST with JSON body
-                wxString jsonBody = R"({
-                    "jql": "assignee=currentUser() ORDER BY updated DESC",
-                    "fields": ["key", "summary", "status", "priority", "issuetype", "assignee", "updated"],
-                    "maxResults": 50
-                })";
-                result = MakeJiraRequest("/rest/api/3/search/jql", "POST", jsonBody);
-            } else {
-                // API v2 uses GET with query params
-                wxString endpoint = "/rest/api/2/search?jql=assignee%3DcurrentUser()%20ORDER%20BY%20updated%20DESC"
-                    "&fields=key,summary,status,priority,issuetype,assignee,updated&maxResults=50";
-                result = MakeJiraRequest(endpoint);
-            }
+        std::thread([this, client]() mutable {
+            auto result = client.GetMyIssues(50);
             
             std::vector<JiraIssue> issues;
             wxString errorMsg;
             
-            if (!result.error.IsEmpty()) {
-                errorMsg = result.error;
-            } else if (!result.success) {
-                errorMsg = GetHttpErrorMessage(result.httpCode, result.response);
-            } else if (result.response.find("\"errorMessages\"") != std::string::npos) {
-                errorMsg = GetHttpErrorMessage(400, result.response);
+            if (!result.success) {
+                errorMsg = wxString::FromUTF8(result.error.c_str());
             } else {
-                issues = ParseJiraResponse(result.response);
+                for (const auto& issue : result.data) {
+                    issues.push_back(ConvertIssue(issue));
+                }
             }
             
             // Update UI on main thread
-            wxTheApp->CallAfter([this, issues, errorMsg, httpCode = result.httpCode]() {
+            wxTheApp->CallAfter([this, issues, errorMsg]() {
                 m_loading = false;
                 m_issues = issues;
                 
@@ -893,7 +687,8 @@ private:
                     emptyLabel->SetForegroundColour(wxColour(46, 204, 113));
                     emptyLabel->Wrap(200);
                     m_issuesSizer->Add(emptyLabel, 0, wxALL, 10);
-                    m_statusLabel->SetLabel(wxString::Format(wxT("\u2713 %s"), m_jiraUser));
+                    auto& cfg = m_jiraClient.GetConfig();
+                    m_statusLabel->SetLabel(wxString::Format(wxT("\u2713 %s"), wxString::FromUTF8(cfg.user.c_str())));
                     m_statusLabel->SetForegroundColour(wxColour(46, 204, 113));
                 } else {
                     for (const auto& issue : m_issues) {
@@ -901,7 +696,8 @@ private:
                         card->SetThemeColors(m_bgColor, m_fgColor);
                         m_issuesSizer->Add(card, 0, wxEXPAND | wxBOTTOM, 5);
                     }
-                    m_statusLabel->SetLabel(wxString::Format(wxT("\u2713 %s"), m_jiraUser));
+                    auto& cfg = m_jiraClient.GetConfig();
+                    m_statusLabel->SetLabel(wxString::Format(wxT("\u2713 %s"), wxString::FromUTF8(cfg.user.c_str())));
                     m_statusLabel->SetForegroundColour(wxColour(46, 204, 113));
                 }
                 
@@ -933,7 +729,7 @@ private:
             return;
         }
         
-        if (m_jiraUser.IsEmpty() || m_jiraToken.IsEmpty() || m_jiraUrl.IsEmpty()) {
+        if (!m_jiraClient.IsConfigured()) {
             wxMessageBox("Please configure JIRA settings first.", "Configuration Required",
                         wxOK | wxICON_WARNING, m_panel);
             return;
@@ -950,78 +746,42 @@ private:
         priority = priority.AfterFirst(' ');
         
         // Map type names to JIRA issue type names
-        wxString issueType = "Task";
+        std::string issueType = "Task";
         if (type.Contains("Bug")) issueType = "Bug";
         else if (type.Contains("Story")) issueType = "Story";
         else if (type.Contains("Sub")) issueType = "Sub-task";
         
         // Map priority names to JIRA priority names
-        wxString issuePriority = "Medium";
+        std::string issuePriority = "Medium";
         if (priority.Contains("Highest")) issuePriority = "Highest";
         else if (priority.Contains("High")) issuePriority = "High";
         else if (priority.Contains("Low")) issuePriority = "Low";
         else if (priority.Contains("Lowest")) issuePriority = "Lowest";
         
-        // Escape JSON strings
-        auto escapeJson = [](const wxString& s) {
-            wxString result;
-            for (auto c : s) {
-                if (c == '"') result += "\\\"";
-                else if (c == '\\') result += "\\\\";
-                else if (c == '\n') result += "\\n";
-                else if (c == '\r') result += "\\r";
-                else if (c == '\t') result += "\\t";
-                else result += c;
-            }
-            return result;
-        };
-        
-        // Build JSON payload for JIRA API
-        wxString jsonPayload = wxString::Format(
-            R"({
-                "fields": {
-                    "project": {"key": "%s"},
-                    "summary": "%s",
-                    "description": "%s",
-                    "issuetype": {"name": "%s"},
-                    "priority": {"name": "%s"}
-                }
-            })",
-            escapeJson(project),
-            escapeJson(summary),
-            escapeJson(description),
-            escapeJson(issueType),
-            escapeJson(issuePriority)
-        );
-        
         // Disable button while creating
         m_submitBtn->Disable();
         m_submitBtn->SetLabel("Creating...");
         
+        // Copy values for thread
+        std::string projectStr = project.ToStdString();
+        std::string summaryStr = summary.ToStdString();
+        std::string descStr = description.ToStdString();
+        Jira::Client client = m_jiraClient;
+        
         // Create issue in background thread
-        wxString createEndpoint = wxString::Format("/rest/api/%s/issue", m_jiraApiVersion);
-        std::thread([this, jsonPayload, summary, createEndpoint]() {
-            JiraApiResult result = MakeJiraRequest(createEndpoint, "POST", jsonPayload);
+        std::thread([this, client, projectStr, summaryStr, issueType, descStr, issuePriority]() mutable {
+            auto result = client.CreateIssue(projectStr, summaryStr, issueType, descStr, issuePriority);
             
             wxString newKey;
             wxString errorMsg;
             
-            if (!result.error.IsEmpty()) {
-                errorMsg = result.error;
-            } else if (!result.success) {
-                errorMsg = GetHttpErrorMessage(result.httpCode, result.response);
+            if (!result.success) {
+                errorMsg = wxString::FromUTF8(result.error.c_str());
             } else {
-                // Parse create response using Glaze
-                JiraApi::CreateIssueResponse createResp;
-                auto ec = glz::read<glz::opts{.error_on_unknown_keys = false}>(createResp, result.response);
-                if (!ec && !createResp.key.empty()) {
-                    newKey = wxString::FromUTF8(createResp.key.c_str());
-                } else {
-                    errorMsg = "Unexpected response from JIRA API";
-                }
+                newKey = wxString::FromUTF8(result.data.c_str());
             }
             
-            wxTheApp->CallAfter([this, newKey, errorMsg, summary]() {
+            wxTheApp->CallAfter([this, newKey, errorMsg, client]() {
                 m_submitBtn->Enable();
                 m_submitBtn->SetLabel(wxT("\u2795 Create Issue"));
                 
@@ -1037,12 +797,13 @@ private:
                     FetchIssuesFromApi();
                     
                     // Show success with link
+                    wxString url = wxString::FromUTF8(client.GetConfig().apiUrl.c_str()) + "/browse/" + newKey;
                     int result = wxMessageBox(
                         wxString::Format("Issue %s created!\n\nClick OK to open in browser.", newKey),
                         "Success", wxOK | wxCANCEL | wxICON_INFORMATION, m_panel);
                     
                     if (result == wxOK) {
-                        wxLaunchDefaultBrowser(m_jiraUrl + "/browse/" + newKey);
+                        wxLaunchDefaultBrowser(url);
                     }
                 }
             });

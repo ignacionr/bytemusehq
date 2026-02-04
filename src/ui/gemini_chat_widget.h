@@ -11,6 +11,7 @@
 #include "../mcp/mcp_filesystem.h"
 #include "../mcp/mcp_terminal.h"
 #include "../mcp/mcp_code_index.h"
+#include "../mcp/mcp_jira.h"
 #include <wx/dcbuffer.h>
 #include <wx/timer.h>
 #include <wx/textctrl.h>
@@ -1106,6 +1107,7 @@ private:
     std::shared_ptr<MCP::FilesystemProvider> m_fsProvider;
     std::shared_ptr<MCP::TerminalProvider> m_terminalProvider;
     std::shared_ptr<MCP::CodeIndexProvider> m_codeIndexProvider;
+    std::shared_ptr<MCP::JiraProvider> m_jiraProvider;
     
     // Thread-safe response queue
     std::mutex m_responseMutex;
@@ -1193,6 +1195,12 @@ private:
             m_codeIndexProvider->setSshConfig(codeIndexSsh);
         }
         MCP::Registry::Instance().registerProvider(m_codeIndexProvider);
+        
+        // Create Jira provider (if configured)
+        m_jiraProvider = std::make_shared<MCP::JiraProvider>();
+        if (m_jiraProvider->isConfigured()) {
+            MCP::Registry::Instance().registerProvider(m_jiraProvider);
+        }
         
         // Enable MCP in Gemini client
         AI::GeminiClient::Instance().SetMCPEnabled(true);
