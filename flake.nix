@@ -14,7 +14,7 @@
       {
         packages.default = pkgs.stdenv.mkDerivation {
           pname = "bytemusehq";
-          version = "0.1.0";
+          version = "1.0.37";
 
           src = ./.;
 
