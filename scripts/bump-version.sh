@@ -46,7 +46,8 @@ git tag "$TAG"
 
 echo "Created tag: $TAG"
 
-# Push the tag to origin
+# Push the commit and tag to origin
+git push origin HEAD
 git push origin "$TAG"
 
 echo "Pushed tag $TAG to origin"
