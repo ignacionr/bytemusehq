@@ -26,14 +26,14 @@ namespace Api {
     };
     
     struct User {
-        std::string displayName;
-        std::string accountId;  // API v3
-        std::string key;        // API v2 (legacy)
+        std::optional<std::string> displayName;
+        std::optional<std::string> accountId;  // API v3
+        std::optional<std::string> key;        // API v2 (legacy)
     };
     
     struct IssueFields {
         std::string summary;
-        std::string description;
+        std::optional<std::string> description;
         std::string updated;
         std::optional<NamedField> status;
         std::optional<NamedField> priority;
@@ -74,7 +74,7 @@ namespace Api {
     struct IssueType {
         std::string id;
         std::string name;
-        std::string description;
+        std::optional<std::string> description;
         bool subtask = false;
     };
     
@@ -129,7 +129,7 @@ struct Issue {
         Issue issue;
         issue.key = apiIssue.key;
         issue.summary = apiIssue.fields.summary;
-        issue.description = apiIssue.fields.description;
+        issue.description = apiIssue.fields.description.value_or("");
         
         if (apiIssue.fields.status) {
             issue.status = apiIssue.fields.status->name;
@@ -141,10 +141,10 @@ struct Issue {
             issue.type = apiIssue.fields.issuetype->name;
         }
         if (apiIssue.fields.assignee) {
-            issue.assignee = apiIssue.fields.assignee->displayName;
+            issue.assignee = apiIssue.fields.assignee->displayName.value_or("Unknown");
         }
         if (apiIssue.fields.reporter) {
-            issue.reporter = apiIssue.fields.reporter->displayName;
+            issue.reporter = apiIssue.fields.reporter->displayName.value_or("Unknown");
         }
         
         issue.updated = apiIssue.fields.updated;
@@ -168,7 +168,7 @@ struct Comment {
         Comment comment;
         comment.id = apiComment.id;
         comment.body = apiComment.body;
-        comment.author = apiComment.author.displayName;
+        comment.author = apiComment.author.displayName.value_or("Unknown");
         comment.created = apiComment.created;
         comment.updated = apiComment.updated;
         return comment;
