@@ -54,6 +54,15 @@ private:
  */
 class SymbolsWidget : public Widget {
 public:
+    ~SymbolsWidget() {
+        // Clear log callback BEFORE destroying LspClient to prevent 
+        // crashes during shutdown when wxTheApp may be null
+        if (m_lspClient) {
+            m_lspClient->setLogCallback(nullptr);
+            m_lspClient->stop();
+        }
+    }
+    
     WidgetInfo GetInfo() const override {
         WidgetInfo info;
         info.id = "core.symbols";
@@ -447,16 +456,19 @@ private:
         // Set up log callback to see what's happening - show ALL messages now
         m_lspClient->setLogCallback([this](const std::string& message) {
             wxLogMessage("LSP: %s", wxString::FromUTF8(message));
-            wxTheApp->CallAfter([this, message]() {
-                // Show important messages in status (but not debug separator lines)
-                if ((message.find("Error") != std::string::npos ||
-                     message.find("error") != std::string::npos ||
-                     message.find("Failed") != std::string::npos ||
-                     message.find("[stderr]") != std::string::npos) &&
-                    message.find("===") == std::string::npos) {
-                    ShowStatus(wxString::FromUTF8(message.substr(0, 80)));
-                }
-            });
+            // Check wxTheApp is valid before using CallAfter (can be null during shutdown)
+            if (wxTheApp) {
+                wxTheApp->CallAfter([this, message]() {
+                    // Show important messages in status (but not debug separator lines)
+                    if ((message.find("Error") != std::string::npos ||
+                         message.find("error") != std::string::npos ||
+                         message.find("Failed") != std::string::npos ||
+                         message.find("[stderr]") != std::string::npos) &&
+                        message.find("===") == std::string::npos) {
+                        ShowStatus(wxString::FromUTF8(message.substr(0, 80)));
+                    }
+                });
+            }
         });
         
         // Use stored remote mode flag for consistency
