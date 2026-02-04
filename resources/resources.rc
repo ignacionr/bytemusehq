@@ -1,0 +1,11 @@
+// Windows resource script for ByteMuse HQ
+#include "resources.h"
+
+// Embed PNG icons as RCDATA resources
+IDI_ICON_FOLDER     RCDATA  "icons/folder.png"
+IDI_ICON_CODE       RCDATA  "icons/code.png"
+IDI_ICON_CLOCK      RCDATA  "icons/clock.png"
+IDI_ICON_ROBOT      RCDATA  "icons/robot.png"
+IDI_ICON_LINK       RCDATA  "icons/link.png"
+IDI_ICON_TOOLS      RCDATA  "icons/tools.png"
+IDI_ICON_GEAR       RCDATA  "icons/gear.png"

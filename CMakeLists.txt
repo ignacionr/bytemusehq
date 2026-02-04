@@ -44,6 +44,11 @@ set(SOURCES
     src/fs/fs.cpp
 )
 
+# Add Windows resource file for embedded icons
+if(WIN32)
+    list(APPEND SOURCES resources/resources.rc)
+endif()
+
 set(HEADERS
     src/ui/frame.h
     src/ui/editor.h
@@ -63,7 +68,36 @@ set(HEADERS
 )
 
 # Create executable
-add_executable(${PROJECT_NAME} WIN32 ${SOURCES} ${HEADERS})
+# On macOS, create an app bundle
+if(APPLE)
+  add_executable(${PROJECT_NAME} MACOSX_BUNDLE ${SOURCES} ${HEADERS})
+  
+  # Set bundle properties
+  set(MACOSX_BUNDLE_BUNDLE_NAME "ByteMuse HQ")
+  set(MACOSX_BUNDLE_EXECUTABLE_NAME ${PROJECT_NAME})
+  set(MACOSX_BUNDLE_GUI_IDENTIFIER "com.bytemuse.hq")
+  set(MACOSX_BUNDLE_BUNDLE_VERSION "1.0.0")
+  set(MACOSX_BUNDLE_SHORT_VERSION_STRING "1.0")
+  set(MACOSX_BUNDLE_COPYRIGHT "Copyright © 2026 ByteMuse")
+  set(MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/resources/macos/Info.plist.in)
+  
+  # Collect icon resources for the bundle
+  file(GLOB ICON_FILES "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/*.png")
+  set_source_files_properties(${ICON_FILES} PROPERTIES
+    MACOSX_PACKAGE_LOCATION "Resources/icons"
+  )
+  target_sources(${PROJECT_NAME} PRIVATE ${ICON_FILES})
+  
+  # Set output name for the bundle
+  set_target_properties(${PROJECT_NAME} PROPERTIES
+    OUTPUT_NAME "ByteMuse HQ"
+    MACOSX_BUNDLE TRUE
+  )
+elseif(WIN32)
+  add_executable(${PROJECT_NAME} WIN32 ${SOURCES} ${HEADERS})
+else()
+  add_executable(${PROJECT_NAME} ${SOURCES} ${HEADERS})
+endif()
 
 # Link wxWidgets libraries
 target_link_libraries(${PROJECT_NAME} ${wxWidgets_LIBRARIES})
@@ -94,6 +128,13 @@ endif()
 
 # Include directories
 target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+# Copy resources to build directory (for Linux where icons aren't embedded or bundled)
+if(NOT WIN32 AND NOT APPLE)
+  file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/resources/icons)
+  file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/
+       DESTINATION ${CMAKE_BINARY_DIR}/resources/icons/)
+endif()
 
 # Install rules
 install(TARGETS ${PROJECT_NAME} DESTINATION bin)

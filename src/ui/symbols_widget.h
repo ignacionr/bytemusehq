@@ -55,6 +55,16 @@ private:
 class SymbolsWidget : public Widget {
 public:
     ~SymbolsWidget() {
+        // Mark as destroyed to prevent callbacks from using invalid 'this'
+        m_destroyed = true;
+        
+        // Stop and cleanup timer
+        if (m_indexTimeoutTimer) {
+            m_indexTimeoutTimer->Stop();
+            delete m_indexTimeoutTimer;
+            m_indexTimeoutTimer = nullptr;
+        }
+        
         // Clear log callback BEFORE destroying LspClient to prevent 
         // crashes during shutdown when wxTheApp may be null
         if (m_lspClient) {
@@ -394,6 +404,7 @@ private:
     wxString m_workspaceRoot;
     bool m_isRemoteMode = false;
     bool m_isInitializing = false;  // Guard against re-entrant initialization
+    bool m_destroyed = false;       // Flag to detect use-after-destroy in callbacks
     
     // Index data
     std::vector<std::pair<std::string, LspDocumentSymbol>> m_allSymbols;
@@ -457,8 +468,9 @@ private:
         m_lspClient->setLogCallback([this](const std::string& message) {
             wxLogMessage("LSP: %s", wxString::FromUTF8(message));
             // Check wxTheApp is valid before using CallAfter (can be null during shutdown)
-            if (wxTheApp) {
+            if (wxTheApp && !m_destroyed) {
                 wxTheApp->CallAfter([this, message]() {
+                    if (m_destroyed) return;
                     // Show important messages in status (but not debug separator lines)
                     if ((message.find("Error") != std::string::npos ||
                          message.find("error") != std::string::npos ||
@@ -533,6 +545,7 @@ private:
         m_lspClient->initialize([this](bool success) {
             wxLogMessage("SymbolsWidget: Initialize callback - success: %d", success);
             wxTheApp->CallAfter([this, success]() {
+                if (m_destroyed) return;  // Widget was destroyed, bail out
                 m_isInitializing = false;  // Reset guard now that initialization is done
                 if (success) {
                     ShowStatus("LSP ready, scanning...");
@@ -646,9 +659,21 @@ private:
         // Scan files
         bool cont = dir.GetFirst(&filename, wxEmptyString, wxDIR_FILES);
         while (cont) {
+            // wxDir::GetFirst/GetNext should return just the filename, but validate
+            if (filename.Contains('/') || filename.Contains('\\')) {
+                wxLogMessage("SymbolsWidget: Unexpected path in filename: %s", filename);
+                cont = dir.GetNext(&filename);
+                continue;
+            }
+            
             wxString ext = filename.AfterLast('.').Lower();
             if (m_sourceExtensions.count(ext)) {
-                wxString fullPath = wxFileName(dirPath, filename).GetFullPath();
+                // Use path concatenation instead of wxFileName to avoid assert
+                wxString fullPath = dirPath;
+                if (!fullPath.EndsWith('/') && !fullPath.EndsWith('\\')) {
+                    fullPath += wxFileName::GetPathSeparator();
+                }
+                fullPath += filename;
                 m_filesToIndex.push_back(std::string(fullPath.ToUTF8().data()));
             }
             cont = dir.GetNext(&filename);
@@ -657,8 +682,20 @@ private:
         // Scan subdirectories (skip hidden and common non-source dirs)
         cont = dir.GetFirst(&filename, wxEmptyString, wxDIR_DIRS);
         while (cont) {
+            // Validate directory name doesn't contain path separators
+            if (filename.Contains('/') || filename.Contains('\\')) {
+                wxLogMessage("SymbolsWidget: Unexpected path in dirname: %s", filename);
+                cont = dir.GetNext(&filename);
+                continue;
+            }
+            
             if (ShouldScanDirectory(filename)) {
-                wxString subDir = wxFileName(dirPath, filename).GetFullPath();
+                // Use path concatenation instead of wxFileName to avoid assert
+                wxString subDir = dirPath;
+                if (!subDir.EndsWith('/') && !subDir.EndsWith('\\')) {
+                    subDir += wxFileName::GetPathSeparator();
+                }
+                subDir += filename;
                 ScanDirectoryLocal(subDir);
             }
             cont = dir.GetNext(&filename);
@@ -787,6 +824,13 @@ private:
      * Index the next file in the queue.
      */
     void IndexNextFile() {
+        // Safety check - ensure panel is still valid
+        if (!m_panel || !m_panel->IsShown()) {
+            wxLogMessage("SymbolsWidget: Panel invalid or hidden, stopping indexing");
+            m_indexingComplete = true;
+            return;
+        }
+        
         if (m_currentIndexFile >= m_filesToIndex.size()) {
             // Indexing complete
             m_indexingComplete = true;
@@ -826,7 +870,10 @@ private:
             wxLogMessage("SymbolsWidget: Failed to read file %s, skipping", filePath);
             m_currentIndexFile++;
             // Use CallAfter to prevent stack overflow on many failures
-            wxTheApp->CallAfter([this]() { IndexNextFile(); });
+            wxTheApp->CallAfter([this]() {
+                if (m_destroyed) return;
+                IndexNextFile();
+            });
             return;
         }
         
@@ -851,6 +898,8 @@ private:
             }
             
             wxTheApp->CallAfter([this, filePath, uri, symbols]() {
+                if (m_destroyed) return;
+                
                 // Stop timeout timer
                 if (m_indexTimeoutTimer && m_indexTimeoutTimer->IsRunning()) {
                     m_indexTimeoutTimer->Stop();
@@ -875,6 +924,8 @@ private:
         if (!m_indexTimeoutTimer) {
             m_indexTimeoutTimer = new wxTimer(m_panel);
             m_panel->Bind(wxEVT_TIMER, [this](wxTimerEvent&) {
+                if (m_destroyed) return;
+                
                 // Use member variable that was captured before timeout
                 auto requestCompleted = m_currentRequestCompleted;
                 if (!requestCompleted || requestCompleted->exchange(true)) {

@@ -1,9 +1,58 @@
 #include "widget_activity_bar.h"
 #include <algorithm>
 #include <wx/filename.h>
+#include <wx/mstream.h>
 
-// Helper to load and colorize an image file
-static wxBitmap LoadIconWithColor(const wxString& iconPath, int size, const wxColour& color)
+#ifdef __WXMSW__
+#include <windows.h>
+#endif
+
+#ifdef __WXMSW__
+// Helper to load image from Windows embedded resource
+static wxImage LoadImageFromResource(int resourceId)
+{
+    wxImage img;
+    HRSRC hResource = FindResource(NULL, MAKEINTRESOURCE(resourceId), RT_RCDATA);
+    if (hResource) {
+        HGLOBAL hMemory = LoadResource(NULL, hResource);
+        if (hMemory) {
+            DWORD size = SizeofResource(NULL, hResource);
+            void* pData = LockResource(hMemory);
+            if (pData && size > 0) {
+                wxMemoryInputStream stream(pData, size);
+                img.LoadFile(stream, wxBITMAP_TYPE_PNG);
+            }
+        }
+    }
+    return img;
+}
+#endif
+
+// Helper to colorize an image
+static void ColorizeImage(wxImage& img, const wxColour& color)
+{
+    if (!img.IsOk()) return;
+    
+    if (!img.HasAlpha()) {
+        img.InitAlpha();
+    }
+    
+    unsigned char* data = img.GetData();
+    unsigned char* alpha = img.GetAlpha();
+    int pixelCount = img.GetWidth() * img.GetHeight();
+    
+    for (int i = 0; i < pixelCount; i++) {
+        // If pixel is not fully transparent, colorize it
+        if (alpha && alpha[i] > 0) {
+            data[i * 3] = color.Red();
+            data[i * 3 + 1] = color.Green();
+            data[i * 3 + 2] = color.Blue();
+        }
+    }
+}
+
+// Helper to load and colorize an icon (from resource on Windows, from file otherwise)
+static wxBitmap LoadIconWithColor(const wxString& iconPath, int resourceId, int size, const wxColour& color)
 {
     // Create a bitmap to hold the icon
     wxBitmap bitmap(size, size);
@@ -11,32 +60,30 @@ static wxBitmap LoadIconWithColor(const wxString& iconPath, int size, const wxCo
     memDC.SetBackground(*wxTRANSPARENT_BRUSH);
     memDC.Clear();
     
-    // Try to load the image from file
     wxImage img;
-    if (wxFileName::FileExists(iconPath) && img.LoadFile(iconPath)) {
+    
+#ifdef __WXMSW__
+    // On Windows, try to load from embedded resource first
+    if (resourceId > 0) {
+        img = LoadImageFromResource(resourceId);
+    }
+#else
+    (void)resourceId; // Suppress unused parameter warning
+#endif
+    
+    // Fall back to file if resource loading failed or not on Windows
+    if (!img.IsOk() && !iconPath.IsEmpty() && wxFileName::FileExists(iconPath)) {
+        img.LoadFile(iconPath);
+    }
+    
+    if (img.IsOk()) {
         // Scale image to desired size if needed
         if (img.GetWidth() != size || img.GetHeight() != size) {
             img = img.Scale(size, size, wxIMAGE_QUALITY_HIGH);
         }
         
-        // Colorize the image by replacing non-transparent pixels with the desired color
-        // This works well for monochrome icon templates
-        if (!img.HasAlpha()) {
-            img.InitAlpha();
-        }
-        
-        unsigned char* data = img.GetData();
-        unsigned char* alpha = img.GetAlpha();
-        int pixelCount = img.GetWidth() * img.GetHeight();
-        
-        for (int i = 0; i < pixelCount; i++) {
-            // If pixel is not fully transparent, colorize it
-            if (alpha && alpha[i] > 0) {
-                data[i * 3] = color.Red();
-                data[i * 3 + 1] = color.Green();
-                data[i * 3 + 2] = color.Blue();
-            }
-        }
+        // Colorize the image
+        ColorizeImage(img, color);
         
         memDC.DrawBitmap(wxBitmap(img), 0, 0, true);
     } else {
@@ -87,8 +134,8 @@ ActivityBarButton::ActivityBarButton(wxWindow* parent, const WidgetCategory& cat
 
 void ActivityBarButton::LoadIcon()
 {
-    // Load icon with default foreground color
-    m_iconBitmap = LoadIconWithColor(m_category.icon, ICON_SIZE, m_fgColor);
+    // Load icon with default foreground color (from resource on Windows, file otherwise)
+    m_iconBitmap = LoadIconWithColor(m_category.icon, m_category.iconResourceId, ICON_SIZE, m_fgColor);
 }
 
 void ActivityBarButton::SetSelected(bool selected)
@@ -156,7 +203,7 @@ void ActivityBarButton::OnPaint(wxPaintEvent& event)
         wxColour iconColor = m_selected ? m_selectedColor : (m_hovered ? m_hoverColor : m_fgColor);
         
         // Reload bitmap with current state color if needed
-        wxBitmap coloredIcon = LoadIconWithColor(m_category.icon, ICON_SIZE, iconColor);
+        wxBitmap coloredIcon = LoadIconWithColor(m_category.icon, m_category.iconResourceId, ICON_SIZE, iconColor);
         
         int x = (size.x - ICON_SIZE) / 2;
         int y = (size.y - ICON_SIZE) / 2;

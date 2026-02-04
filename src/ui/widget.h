@@ -2,6 +2,8 @@
 #define WIDGET_H
 
 #include <wx/wx.h>
+#include <wx/stdpaths.h>
+#include <wx/filename.h>
 #include <memory>
 #include <string>
 #include <vector>
@@ -38,12 +40,13 @@ enum class WidgetLocation {
 struct WidgetCategory {
     wxString id;            // Unique identifier (e.g., "productivity")
     wxString name;          // Display name
-    wxString icon;          // Icon character (emoji or symbol)
+    wxString icon;          // Icon file path (for non-Windows) or empty
+    int iconResourceId;     // Windows resource ID (for embedded icons)
     int order;              // Display order in activity bar (lower = higher)
     
-    WidgetCategory() : order(100) {}
-    WidgetCategory(const wxString& id_, const wxString& name_, const wxString& icon_, int order_ = 100)
-        : id(id_), name(name_), icon(icon_), order(order_) {}
+    WidgetCategory() : iconResourceId(0), order(100) {}
+    WidgetCategory(const wxString& id_, const wxString& name_, const wxString& icon_, int resourceId_, int order_ = 100)
+        : id(id_), name(name_), icon(icon_), iconResourceId(resourceId_), order(order_) {}
     
     bool operator<(const WidgetCategory& other) const {
         return order < other.order;
@@ -54,32 +57,96 @@ struct WidgetCategory {
     }
 };
 
+#ifdef __WXMSW__
+#include "../../resources/resources.h"
+#endif
+
+/**
+ * Icon resource IDs for Windows embedded resources.
+ * On Windows, icons are embedded in the executable as RCDATA.
+ * On other platforms, icons are loaded from files relative to the executable.
+ */
+namespace IconResources {
+#ifdef __WXMSW__
+    // Windows resource IDs
+    constexpr int Folder = IDI_ICON_FOLDER;
+    constexpr int Code = IDI_ICON_CODE;
+    constexpr int Clock = IDI_ICON_CLOCK;
+    constexpr int Robot = IDI_ICON_ROBOT;
+    constexpr int Link = IDI_ICON_LINK;
+    constexpr int Tools = IDI_ICON_TOOLS;
+    constexpr int Gear = IDI_ICON_GEAR;
+#else
+    // Placeholder values for non-Windows (not used)
+    constexpr int Folder = 0;
+    constexpr int Code = 0;
+    constexpr int Clock = 0;
+    constexpr int Robot = 0;
+    constexpr int Link = 0;
+    constexpr int Tools = 0;
+    constexpr int Gear = 0;
+#endif
+}
+
 /**
  * Icon path helper - provides paths to icon files.
- * Uses PNG files for better cross-platform compatibility.
+ * On macOS, looks inside the app bundle Resources folder.
+ * On Linux, resolves paths relative to the executable.
+ * On Windows, icons are embedded as resources.
  */
 namespace IconPaths {
-    inline wxString Folder()      { return "resources/icons/folder.png"; }
-    inline wxString Code()        { return "resources/icons/code.png"; }
-    inline wxString Clock()       { return "resources/icons/clock.png"; }
-    inline wxString Robot()       { return "resources/icons/robot.png"; }
-    inline wxString Link()        { return "resources/icons/link.png"; }
-    inline wxString Tools()       { return "resources/icons/tools.png"; }
-    inline wxString Gear()        { return "resources/icons/gear.png"; }
+    // Get the base path for resources
+    inline wxString GetResourceBasePath() {
+#ifdef __WXOSX__
+        // On macOS, use the app bundle's Resources directory
+        return wxStandardPaths::Get().GetResourcesDir();
+#else
+        // On other platforms, use the directory containing the executable
+        wxFileName exePath(wxStandardPaths::Get().GetExecutablePath());
+        return exePath.GetPath();
+#endif
+    }
+    
+    // Build a full path to a resource file
+    inline wxString GetResourcePath(const wxString& relativePath) {
+        wxString basePath = GetResourceBasePath();
+        if (!basePath.EndsWith('/') && !basePath.EndsWith('\\')) {
+            basePath += wxFileName::GetPathSeparator();
+        }
+#ifdef __WXOSX__
+        // On macOS, resources are directly in the Resources folder
+        wxString fullPath = basePath + relativePath;
+#else
+        // On other platforms, include the resources/ prefix
+        wxString fullPath = basePath + "resources/" + relativePath;
+#endif
+        // Normalize the path
+        wxFileName normalized(fullPath);
+        normalized.Normalize(wxPATH_NORM_DOTS | wxPATH_NORM_ABSOLUTE);
+        return normalized.GetFullPath();
+    }
+    
+    inline wxString Folder()      { return GetResourcePath("icons/folder.png"); }
+    inline wxString Code()        { return GetResourcePath("icons/code.png"); }
+    inline wxString Clock()       { return GetResourcePath("icons/clock.png"); }
+    inline wxString Robot()       { return GetResourcePath("icons/robot.png"); }
+    inline wxString Link()        { return GetResourcePath("icons/link.png"); }
+    inline wxString Tools()       { return GetResourcePath("icons/tools.png"); }
+    inline wxString Gear()        { return GetResourcePath("icons/gear.png"); }
 }
 
 /**
  * Predefined widget categories.
  */
 namespace WidgetCategories {
-    // Core categories
-    inline WidgetCategory Explorer() { return WidgetCategory("explorer", "Explorer", IconPaths::Folder(), 5); }
-    inline WidgetCategory Code() { return WidgetCategory("code", "Code", IconPaths::Code(), 7); }
-    inline WidgetCategory Productivity() { return WidgetCategory("productivity", "Productivity", IconPaths::Clock(), 10); }
-    inline WidgetCategory AI() { return WidgetCategory("ai", "AI Assistant", IconPaths::Robot(), 20); }
-    inline WidgetCategory Integrations() { return WidgetCategory("integrations", "Integrations", IconPaths::Link(), 30); }
-    inline WidgetCategory Tools() { return WidgetCategory("tools", "Tools", IconPaths::Tools(), 40); }
-    inline WidgetCategory Settings() { return WidgetCategory("settings", "Settings", IconPaths::Gear(), 90); }
+    // Core categories - include both file path and resource ID
+    inline WidgetCategory Explorer() { return WidgetCategory("explorer", "Explorer", IconPaths::Folder(), IconResources::Folder, 5); }
+    inline WidgetCategory Code() { return WidgetCategory("code", "Code", IconPaths::Code(), IconResources::Code, 7); }
+    inline WidgetCategory Productivity() { return WidgetCategory("productivity", "Productivity", IconPaths::Clock(), IconResources::Clock, 10); }
+    inline WidgetCategory AI() { return WidgetCategory("ai", "AI Assistant", IconPaths::Robot(), IconResources::Robot, 20); }
+    inline WidgetCategory Integrations() { return WidgetCategory("integrations", "Integrations", IconPaths::Link(), IconResources::Link, 30); }
+    inline WidgetCategory Tools() { return WidgetCategory("tools", "Tools", IconPaths::Tools(), IconResources::Tools, 40); }
+    inline WidgetCategory Settings() { return WidgetCategory("settings", "Settings", IconPaths::Gear(), IconResources::Gear, 90); }
 }
 
 /**

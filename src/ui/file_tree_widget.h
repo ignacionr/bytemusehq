@@ -249,7 +249,12 @@ private:
         
         while (cont) {
             if (!filename.StartsWith(".")) {
-                wxString fullPath = wxFileName(path, filename).GetFullPath();
+                // Use path concatenation instead of wxFileName to avoid assert
+                wxString fullPath = path;
+                if (!fullPath.EndsWith('/') && !fullPath.EndsWith('\\')) {
+                    fullPath += wxFileName::GetPathSeparator();
+                }
+                fullPath += filename;
                 
                 if (wxDir::Exists(fullPath)) {
                     wxTreeItemId itemId = m_treeCtrl->AppendItem(
