@@ -5,7 +5,7 @@
       "name": "Debug (nix)",
       "type": "lldb",
       "request": "launch",
-      "program": "${workspaceFolder}/build/bytemusehq",
+      "program": "${workspaceFolder}/build/ByteMuse HQ.app/Contents/MacOS/ByteMuse HQ",
       "args": [],
       "cwd": "${workspaceFolder}",
       "preLaunchTask": "nix: test",
@@ -23,7 +23,7 @@
       "name": "Debug (nix) - Stop on Entry",
       "type": "lldb",
       "request": "launch",
-      "program": "${workspaceFolder}/build/bytemusehq",
+      "program": "${workspaceFolder}/build/ByteMuse HQ.app/Contents/MacOS/ByteMuse HQ",
       "args": [],
       "cwd": "${workspaceFolder}",
       "preLaunchTask": "nix: build",
@@ -38,7 +38,7 @@
       "name": "Attach to Process",
       "type": "lldb",
       "request": "attach",
-      "program": "${workspaceFolder}/build/bytemusehq",
+      "program": "${workspaceFolder}/build/ByteMuse HQ.app/Contents/MacOS/ByteMuse HQ",
       "pid": "${command:pickProcess}",
       "waitFor": false
     },
@@ -46,7 +46,7 @@
       "name": "Attach by Name",
       "type": "lldb",
       "request": "attach",
-      "program": "${workspaceFolder}/build/bytemusehq",
+      "program": "${workspaceFolder}/build/ByteMuse HQ.app/Contents/MacOS/ByteMuse HQ",
       "waitFor": true
     }
   ]

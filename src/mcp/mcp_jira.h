@@ -3,6 +3,7 @@
 
 #include "mcp.h"
 #include "../jira/jira_client.h"
+#include <wx/log.h>
 
 namespace MCP {
 
@@ -24,7 +25,12 @@ namespace MCP {
  */
 class JiraProvider : public Provider {
 public:
-    JiraProvider() : m_client(Jira::ClientConfig::LoadFromConfig()) {}
+    JiraProvider() : m_client(Jira::ClientConfig::LoadFromConfig()) {
+        auto cfg = m_client.GetConfig();
+        wxLogDebug("MCP Jira: Initialized with apiUrl='%s', user='%s', configured=%s",
+                   cfg.apiUrl.c_str(), cfg.user.c_str(),
+                   m_client.IsConfigured() ? "yes" : "no");
+    }
     
     explicit JiraProvider(const Jira::ClientConfig& config) : m_client(config) {}
     

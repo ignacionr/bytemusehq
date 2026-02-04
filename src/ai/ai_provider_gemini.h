@@ -165,6 +165,15 @@ public:
     static std::string buildRequestBody(const std::vector<ChatMessage>& messages, 
                                         const AIConfig& config,
                                         bool includeTools = true) {
+        wxLogDebug("AI: Building request - systemInstruction: %zu chars, enableMCP: %s, includeTools: %s",
+                   config.systemInstruction.size(),
+                   config.enableMCP ? "yes" : "no",
+                   includeTools ? "yes" : "no");
+        
+        if (!config.systemInstruction.empty()) {
+            wxLogDebug("AI: System instruction:\n%s", config.systemInstruction.c_str());
+        }
+        
         std::string json = "{";
         
         // Contents array

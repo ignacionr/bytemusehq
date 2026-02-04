@@ -8,6 +8,8 @@
 #include <functional>
 #include <optional>
 
+#include <wx/log.h>
+
 namespace MCP {
 
 /**
@@ -384,6 +386,17 @@ public:
      */
     std::string buildGeminiToolsJson() const {
         auto tools = getAllTools();
+        wxLogDebug("MCP: buildGeminiToolsJson() - %zu tools from %zu enabled providers",
+                   tools.size(), getEnabledProviders().size());
+        
+        // Log all registered providers and their status
+        for (const auto& [id, provider] : m_providers) {
+            wxLogDebug("MCP: Provider '%s' (%s) - enabled: %s, tools: %zu",
+                       id.c_str(), provider->getName().c_str(),
+                       provider->isEnabled() ? "yes" : "no",
+                       provider->getTools().size());
+        }
+        
         if (tools.empty()) return "";
         
         std::string json = "\"tools\":[{\"functionDeclarations\":[";
@@ -421,7 +434,15 @@ public:
             description += "\n";
         }
         
-        description += "When the user asks about their code, project structure, or file contents, "
+        // Mention disabled providers that could be enabled
+        for (const auto& [id, provider] : m_providers) {
+            if (!provider->isEnabled()) {
+                description += "Note: " + provider->getName() + " tools are available but not currently configured. ";
+                description += "The user can enable them by configuring the appropriate settings.\n";
+            }
+        }
+        
+        description += "\nWhen the user asks about their code, project structure, or file contents, "
                       "USE THESE TOOLS to read and explore their files. Don't say you can't access files - you can! "
                       "When the user asks you to run commands, build code, or execute scripts, use the terminal tools.";
         

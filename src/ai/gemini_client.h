@@ -149,6 +149,8 @@ public:
     void SetSystemInstruction(const std::string& instruction) {
         std::lock_guard<std::mutex> lock(m_mutex);
         m_config.systemInstruction = instruction;
+        wxLogDebug("AI: System instruction set (%zu chars):\n%s", 
+                   instruction.size(), instruction.c_str());
     }
     
     /**
@@ -521,6 +523,15 @@ private:
      * Build the request JSON body for the Gemini API with optional tools.
      */
     std::string BuildRequestBodyWithTools(const std::vector<ChatMessage>& messages, bool includeTools) const {
+        wxLogDebug("AI: BuildRequestBodyWithTools - messages: %zu, includeTools: %s, systemInstruction: %zu chars",
+                   messages.size(), includeTools ? "yes" : "no", m_config.systemInstruction.size());
+        
+        if (!m_config.systemInstruction.empty()) {
+            wxLogDebug("AI: System instruction:\n%s", m_config.systemInstruction.c_str());
+        } else {
+            wxLogDebug("AI: No system instruction set");
+        }
+        
         std::string json = "{";
         
         // Contents array
@@ -544,9 +555,15 @@ private:
         // Add MCP tools if enabled
         if (includeTools) {
             std::string toolsJson = MCP::Registry::Instance().buildGeminiToolsJson();
+            wxLogDebug("AI: Tools JSON length: %zu", toolsJson.size());
             if (!toolsJson.empty()) {
                 json += "," + toolsJson;
+                wxLogDebug("AI: Added tools to request");
+            } else {
+                wxLogDebug("AI: No tools available (toolsJson empty)");
             }
+        } else {
+            wxLogDebug("AI: Tools disabled (includeTools=false)");
         }
         
         // Generation config
@@ -688,7 +705,13 @@ private:
             // Google Gemini API
             std::string baseUrl = config.getEffectiveBaseUrl();
             request.url = baseUrl + "/models/" + config.model + ":generateContent?key=" + config.apiKey;
-            request.body = BuildRequestBody(messages);
+            
+            wxLogDebug("AI: Building Gemini request body (enableMCP=%s, systemInstruction=%zu chars)",
+                       config.enableMCP ? "yes" : "no",
+                       config.systemInstruction.size());
+            
+            request.body = BuildRequestBodyWithTools(messages, config.enableMCP);
+            
             wxLogDebug("AI: Gemini request to %s/models/%s:generateContent", baseUrl, config.model);
         }
         

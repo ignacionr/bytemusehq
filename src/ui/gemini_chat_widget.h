@@ -1196,11 +1196,12 @@ private:
         }
         MCP::Registry::Instance().registerProvider(m_codeIndexProvider);
         
-        // Create Jira provider (if configured)
+        // Create Jira provider (always register, isEnabled() will gate based on config)
         m_jiraProvider = std::make_shared<MCP::JiraProvider>();
-        if (m_jiraProvider->isConfigured()) {
-            MCP::Registry::Instance().registerProvider(m_jiraProvider);
-        }
+        wxLogDebug("MCP: Jira provider created, isConfigured=%s, isEnabled=%s",
+                   m_jiraProvider->isConfigured() ? "yes" : "no",
+                   m_jiraProvider->isEnabled() ? "yes" : "no");
+        MCP::Registry::Instance().registerProvider(m_jiraProvider);
         
         // Enable MCP in Gemini client
         AI::GeminiClient::Instance().SetMCPEnabled(true);
