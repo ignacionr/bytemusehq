@@ -159,11 +159,14 @@ struct LspSshConfig {
     std::string identityFile;
     std::string extraOptions;
     int connectionTimeout = 30;
+    std::string remoteCommand;  // Command to run clangd on remote (e.g., "nix develop -c clangd")
     
     std::string buildSshPrefix() const {
         if (!enabled || host.empty()) return "";
         
-        std::string cmd = "ssh -tt";
+        // Use -T to disable TTY allocation - critical for binary protocols like LSP
+        // TTY mode causes input echo which corrupts the LSP JSON-RPC communication
+        std::string cmd = "ssh -T";
         
         if (!extraOptions.empty()) {
             cmd += " " + extraOptions;
@@ -187,6 +190,18 @@ struct LspSshConfig {
         }
         
         return cmd;
+    }
+    
+    /**
+     * Get the command to run the LSP server on the remote.
+     * If remoteCommand is set, uses that. Otherwise tries to detect nix
+     * or falls back to the provided command.
+     */
+    std::string getRemoteLspCommand(const std::string& defaultCommand) const {
+        if (!remoteCommand.empty()) {
+            return remoteCommand;
+        }
+        return defaultCommand;
     }
     
     bool isValid() const {
@@ -306,6 +321,7 @@ private:
     
     std::thread m_readerThread;
     std::thread m_writerThread;
+    std::thread m_stderrThread;  // Read stderr for errors and debug output
     std::mutex m_mutex;
     std::mutex m_writeMutex;
     std::string m_inputBuffer;
@@ -340,20 +356,107 @@ public:
     }
     
     bool start(const std::string& command, const std::string& workspaceRoot) {
+        log("=== LSP Client Start ===");
+        log("Input command: " + command);
+        log("Workspace root: " + workspaceRoot);
+        log("SSH config valid: " + std::string(m_sshConfig.isValid() ? "yes" : "no"));
+        
+        if (m_sshConfig.isValid()) {
+            log("SSH host: " + m_sshConfig.host);
+            log("SSH user: " + m_sshConfig.user);
+            log("SSH port: " + std::to_string(m_sshConfig.port));
+            log("SSH remoteCommand: " + m_sshConfig.remoteCommand);
+        }
+        
         if (m_process) {
+            log("Stopping existing process");
             stop();
         }
         
         m_workspaceRoot = workspaceRoot;
         
-        std::string fullCommand = command + " --background-index";
+        std::string fullCommand;
         
         if (m_sshConfig.isValid()) {
+            // Remote execution via SSH
             std::string sshPrefix = m_sshConfig.buildSshPrefix();
-            fullCommand = sshPrefix + " \"cd '" + workspaceRoot + "' && " + fullCommand + "\"";
+            log("SSH prefix: " + sshPrefix);
+            
+            std::string remoteCmd = m_sshConfig.getRemoteLspCommand(command);
+            log("Remote command (after getRemoteLspCommand): " + remoteCmd);
+            
+            // Build the remote command with proper escaping
+            // Try to detect nix environment and use appropriate wrapper
+            std::string nixWrapper = "";
+            if (remoteCmd.find("nix") == std::string::npos) {
+                log("No 'nix' found in remoteCmd, using auto-detection wrapper");
+                // User didn't specify a nix command, so we'll try to detect nix on remote
+                // and wrap the command appropriately
+                // Use nix-shell which doesn't require experimental features
+                nixWrapper = 
+                    "echo '[LSP] Starting clangd detection...' >&2; "
+                    "if command -v " + remoteCmd + " >/dev/null 2>&1; then "
+                    "  echo '[LSP] Found " + remoteCmd + " in PATH, using directly' >&2; "
+                    "  exec " + remoteCmd + " --background-index; "
+                    "elif command -v nix-shell >/dev/null 2>&1; then "
+                    "  echo '[LSP] Using nix-shell -p clang-tools' >&2; "
+                    "  exec nix-shell -p clang-tools --run '" + remoteCmd + " --background-index'; "
+                    "elif command -v nix >/dev/null 2>&1; then "
+                    "  echo '[LSP] Using nix shell with experimental features' >&2; "
+                    "  exec nix --extra-experimental-features 'nix-command flakes' shell nixpkgs#clang-tools -c " + remoteCmd + " --background-index; "
+                    "else "
+                    "  echo '[LSP] Error: clangd not found on remote and nix not available' >&2; exit 1; "
+                    "fi";
+                fullCommand = sshPrefix + " \"cd '" + workspaceRoot + "' && " + nixWrapper + "\"";
+                log("Using nixWrapper auto-detection");
+            } else {
+                log("'nix' found in remoteCmd, using user-specified command");
+                // User specified a nix-aware command
+                // If it's nix develop, wrap with flake.nix check and fallback to nix-shell
+                std::string adjustedCmd = remoteCmd;
+                
+                if (remoteCmd.find("nix develop") != std::string::npos ||
+                    remoteCmd.find("nix run") != std::string::npos ||
+                    remoteCmd.find("nix shell") != std::string::npos) {
+                    
+                    // Add experimental features flag if needed
+                    if (remoteCmd.find("--extra-experimental-features") == std::string::npos &&
+                        remoteCmd.find("nix-shell") == std::string::npos) {
+                        log("Adding --extra-experimental-features flag");
+                        size_t nixPos = remoteCmd.find("nix ");
+                        if (nixPos != std::string::npos) {
+                            adjustedCmd = remoteCmd.substr(0, nixPos + 4) + 
+                                         "--extra-experimental-features 'nix-command flakes' " + 
+                                         remoteCmd.substr(nixPos + 4);
+                        }
+                    }
+                    
+                    // Wrap with flake.nix check and fallback to nix-shell
+                    log("Wrapping with flake.nix check and nix-shell fallback");
+                    std::string wrapper = 
+                        "if [ -f flake.nix ]; then "
+                        "  echo '[LSP] Found flake.nix, using: " + adjustedCmd + "' >&2; "
+                        "  exec " + adjustedCmd + " --background-index; "
+                        "else "
+                        "  echo '[LSP] No flake.nix found, falling back to nix-shell' >&2; "
+                        "  exec nix-shell -p clang-tools --run 'clangd --background-index'; "
+                        "fi";
+                    fullCommand = sshPrefix + " \"cd '" + workspaceRoot + "' && " + wrapper + "\"";
+                } else {
+                    // nix-shell or other command, use directly
+                    log("Adjusted command: " + adjustedCmd);
+                    fullCommand = sshPrefix + " \"cd '" + workspaceRoot + "' && echo '[LSP] Running: " + adjustedCmd + "' >&2 && " + adjustedCmd + " --background-index\"";
+                }
+            }
+        } else {
+            // Local execution
+            log("Local execution mode");
+            fullCommand = command + " --background-index";
         }
         
-        log("Starting LSP server: " + fullCommand);
+        log("=== Final command ===");
+        log(fullCommand);
+        log("=====================");
         
 #ifndef _WIN32
         int stdin_pipe[2], stdout_pipe[2], stderr_pipe[2];
@@ -363,6 +466,7 @@ public:
             return false;
         }
         
+        log("Pipes created, forking...");
         pid_t pid = fork();
         if (pid < 0) {
             log("Failed to fork process");
@@ -388,6 +492,7 @@ public:
         }
         
         // Parent process
+        log("Fork successful, child PID: " + std::to_string(pid));
         close(stdin_pipe[0]);
         close(stdout_pipe[1]);
         close(stderr_pipe[1]);
@@ -406,9 +511,12 @@ public:
 #endif
         
         m_running = true;
+        log("Starting reader, writer, and stderr threads");
         m_readerThread = std::thread(&LspClient::readerThreadFunc, this);
         m_writerThread = std::thread(&LspClient::writerThreadFunc, this);
+        m_stderrThread = std::thread(&LspClient::stderrThreadFunc, this);
         
+        log("LSP client started successfully");
         return true;
     }
     
@@ -432,6 +540,10 @@ public:
         
         if (m_readerThread.joinable()) {
             m_readerThread.join();
+        }
+        
+        if (m_stderrThread.joinable()) {
+            m_stderrThread.join();
         }
         
         m_process.reset();
@@ -696,6 +808,46 @@ private:
             }
             
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+    }
+    
+    void stderrThreadFunc() {
+        char buffer[4096];
+        std::string lineBuffer;
+        
+        while (m_running && m_process) {
+            int bytesRead = m_process->readStderr(buffer, sizeof(buffer) - 1);
+            
+            if (bytesRead > 0) {
+                buffer[bytesRead] = '\0';
+                lineBuffer += buffer;
+                
+                // Process complete lines
+                size_t pos;
+                while ((pos = lineBuffer.find('\n')) != std::string::npos) {
+                    std::string line = lineBuffer.substr(0, pos);
+                    lineBuffer = lineBuffer.substr(pos + 1);
+                    
+                    // Remove trailing \r if present
+                    if (!line.empty() && line.back() == '\r') {
+                        line.pop_back();
+                    }
+                    
+                    if (!line.empty()) {
+                        log("[stderr] " + line);
+                    }
+                }
+            } else if (bytesRead < 0) {
+                // EOF or error - this is normal when process exits
+                break;
+            }
+            
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        
+        // Log any remaining content in buffer
+        if (!lineBuffer.empty()) {
+            log("[stderr] " + lineBuffer);
         }
     }
     

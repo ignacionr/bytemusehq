@@ -322,6 +322,39 @@ void MainFrame::ReinitializeMCPProviders()
     }
 }
 
+void MainFrame::ReinitializeCodeIndex()
+{
+    // Get the SymbolsWidget from the registry and reinitialize it
+    auto& widgetRegistry = WidgetRegistry::Instance();
+    auto widget = widgetRegistry.GetWidget("core.symbols");
+    
+    if (widget) {
+        auto* symbolsWidget = dynamic_cast<BuiltinWidgets::SymbolsWidget*>(widget.get());
+        if (symbolsWidget) {
+            wxLogMessage("MainFrame: Reinitializing Code Index for %s mode",
+                Config::Instance().GetBool("ssh.enabled", false) ? "SSH" : "local");
+            symbolsWidget->Reinitialize();
+            
+            // Also update the MCP provider's SSH config
+            auto codeIndexProvider = std::dynamic_pointer_cast<MCP::CodeIndexProvider>(
+                MCP::Registry::Instance().getProvider("mcp.codeindex"));
+            if (codeIndexProvider) {
+                auto& config = Config::Instance();
+                bool sshEnabled = config.GetBool("ssh.enabled", false);
+                MCP::CodeIndexSshConfig codeIndexSsh;
+                codeIndexSsh.enabled = sshEnabled;
+                if (sshEnabled) {
+                    codeIndexSsh.host = config.GetString("ssh.host", "").ToStdString();
+                    wxString remotePath = config.GetString("ssh.remotePath", "~");
+                    auto sshConfig = FS::SshConfig::LoadFromConfig();
+                    codeIndexSsh.remotePath = sshConfig.expandRemotePath(remotePath.ToStdString());
+                }
+                codeIndexProvider->setSshConfig(codeIndexSsh);
+            }
+        }
+    }
+}
+
 void MainFrame::PopulateTree(const wxTreeItemId& parentItem)
 {
     PathData* parentData = dynamic_cast<PathData*>(m_treeCtrl->GetItemData(parentItem));
@@ -841,7 +874,12 @@ void MainFrame::OpenFolder(const wxString& path, bool isRemote)
     UpdateTitle();
     UpdateStatusBar();
     
+    // Reinitialize the code index for the new workspace/mode FIRST
+    // so that when MCP providers reconnect, the LSP client is ready
+    ReinitializeCodeIndex();
+    
     // Reinitialize MCP providers with the new SSH configuration
+    // This will reconnect callbacks to the already-initialized SymbolsWidget
     ReinitializeMCPProviders();
 }
 

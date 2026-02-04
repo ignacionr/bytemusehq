@@ -35,6 +35,8 @@ void Config::InitializeDefaults() {
     m_values["ssh.extraOptions"] = wxString("");           // Additional SSH options (e.g., -o StrictHostKeyChecking=no)
     m_values["ssh.forwardAgent"] = false;                    // Enable SSH agent forwarding
     m_values["ssh.connectionTimeout"] = 30;                  // Connection timeout in seconds
+    m_values["ssh.clangdCommand"] = wxString("");          // Remote clangd command (auto-detects nix if empty)
+                                                            // Examples: "clangd", "nix develop -c clangd"
     
     // UI defaults
     m_values["ui.sidebarWidth"] = 250;

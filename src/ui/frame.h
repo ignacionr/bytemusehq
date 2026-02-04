@@ -70,6 +70,9 @@ public:
     
     // MCP provider management
     void ReinitializeMCPProviders();
+    
+    // Reinitialize the code index widget for SSH mode changes
+    void ReinitializeCodeIndex();
 
 private:
     wxTreeCtrl* m_treeCtrl;

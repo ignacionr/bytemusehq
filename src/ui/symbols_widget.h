@@ -6,6 +6,7 @@
 #include "../lsp/lsp_client.h"
 #include "../theme/theme.h"
 #include "../config/config.h"
+#include "../fs/fs.h"
 #include <wx/treectrl.h>
 #include <wx/textctrl.h>
 #include <wx/dir.h>
@@ -106,9 +107,21 @@ public:
         // Store context
         m_context = &context;
         
-        // Get workspace root
-        auto* rootPtr = context.Get<wxString>("workspaceRoot");
-        m_workspaceRoot = rootPtr ? *rootPtr : wxGetCwd();
+        // Determine remote mode and workspace root
+        auto& config = Config::Instance();
+        m_isRemoteMode = config.GetBool("ssh.enabled", false);
+        
+        if (m_isRemoteMode) {
+            // Use remote path as workspace root
+            wxString remotePath = config.GetString("ssh.remotePath", "~");
+            auto sshConfig = FS::SshConfig::LoadFromConfig();
+            m_workspaceRoot = wxString(sshConfig.expandRemotePath(remotePath.ToStdString()));
+            m_titleLabel->SetLabel("CODE INDEX [SSH]");
+        } else {
+            // Get local workspace root
+            auto* rootPtr = context.Get<wxString>("workspaceRoot");
+            m_workspaceRoot = rootPtr ? *rootPtr : wxGetCwd();
+        }
         
         // Bind events
         m_treeCtrl->Bind(wxEVT_TREE_ITEM_ACTIVATED, &SymbolsWidget::OnItemActivated, this);
@@ -282,6 +295,82 @@ public:
      * Get the LSP client for direct access if needed.
      */
     LspClient* GetLspClient() { return m_lspClient.get(); }
+    
+    /**
+     * Check if currently operating in remote/SSH mode.
+     */
+    bool IsRemoteMode() const {
+        return m_isRemoteMode;
+    }
+    
+    /**
+     * Reinitialize the widget when SSH connection state changes.
+     * This recreates the LSP client with appropriate SSH config
+     * and re-scans the workspace.
+     */
+    void Reinitialize() {
+        auto& config = Config::Instance();
+        bool sshEnabled = config.GetBool("ssh.enabled", false);
+        
+        wxLogMessage("=== SymbolsWidget::Reinitialize ===");
+        wxLogMessage("SymbolsWidget: SSH enabled in config: %s", sshEnabled ? "YES" : "NO");
+        wxLogMessage("SymbolsWidget: Current m_isRemoteMode: %s", m_isRemoteMode ? "YES" : "NO");
+        
+        // Reset initialization guard for new reinit
+        m_isInitializing = false;
+        
+        // Stop any ongoing indexing
+        wxLogMessage("SymbolsWidget: Stopping indexing");
+        StopIndexing();
+        
+        // Stop existing LSP client
+        if (m_lspClient) {
+            wxLogMessage("SymbolsWidget: Stopping existing LSP client");
+            m_lspClient->stop();
+            m_lspClient.reset();
+        }
+        
+        // Update workspace root based on mode
+        m_isRemoteMode = sshEnabled;
+        
+        if (sshEnabled) {
+            wxString remotePath = config.GetString("ssh.remotePath", "~");
+            wxLogMessage("SymbolsWidget: Remote path from config: %s", remotePath);
+            auto sshConfig = FS::SshConfig::LoadFromConfig();
+            wxLogMessage("SymbolsWidget: SSH config loaded - host: %s, user: %s", 
+                wxString::FromUTF8(sshConfig.host), wxString::FromUTF8(sshConfig.user));
+            m_workspaceRoot = wxString(sshConfig.expandRemotePath(remotePath.ToStdString()));
+            wxLogMessage("SymbolsWidget: Expanded workspace root: %s", m_workspaceRoot);
+        } else {
+            auto* rootPtr = m_context ? m_context->Get<wxString>("workspaceRoot") : nullptr;
+            m_workspaceRoot = rootPtr ? *rootPtr : wxGetCwd();
+            wxLogMessage("SymbolsWidget: Local workspace root: %s", m_workspaceRoot);
+        }
+        
+        // Clear previous data
+        m_allSymbols.clear();
+        m_indexedFiles.clear();
+        m_filesToIndex.clear();
+        m_currentIndexFile = 0;
+        m_indexingComplete = false;
+        
+        // Update UI
+        if (m_treeCtrl) {
+            m_treeCtrl->DeleteAllItems();
+            m_treeCtrl->AddRoot("Workspace");
+        }
+        
+        // Update title to show mode
+        if (m_titleLabel) {
+            wxString title = m_isRemoteMode ? "CODE INDEX [SSH]" : "CODE INDEX";
+            m_titleLabel->SetLabel(title);
+        }
+        
+        ShowStatus(m_isRemoteMode ? "Reinitializing for SSH..." : "Reinitializing...");
+        
+        // Reinitialize LSP and start indexing
+        InitializeLspClient();
+    }
 
 private:
     wxPanel* m_panel = nullptr;
@@ -294,6 +383,8 @@ private:
     
     std::unique_ptr<LspClient> m_lspClient;
     wxString m_workspaceRoot;
+    bool m_isRemoteMode = false;
+    bool m_isInitializing = false;  // Guard against re-entrant initialization
     
     // Index data
     std::vector<std::pair<std::string, LspDocumentSymbol>> m_allSymbols;
@@ -324,6 +415,9 @@ private:
         ssh.identityFile = config.GetString("ssh.identityFile", "").ToStdString();
         ssh.extraOptions = config.GetString("ssh.extraOptions", "").ToStdString();
         ssh.connectionTimeout = config.GetInt("ssh.connectionTimeout", 30);
+        // Remote clangd command - if empty, will auto-detect nix on remote
+        // Examples: "clangd", "nix develop -c clangd", "nix run nixpkgs#clang-tools -- clangd"
+        ssh.remoteCommand = config.GetString("ssh.clangdCommand", "").ToStdString();
         return ssh;
     }
     
@@ -332,28 +426,65 @@ private:
      * Applies SSH configuration if enabled for remote code indexing.
      */
     void InitializeLspClient() {
+        wxLogMessage("=== SymbolsWidget::InitializeLspClient ===");
+        
+        // Guard against re-entrant initialization
+        if (m_isInitializing) {
+            wxLogMessage("SymbolsWidget: Already initializing, skipping duplicate call");
+            return;
+        }
+        m_isInitializing = true;
+        
+        // Ensure clean state
+        if (m_lspClient) {
+            wxLogMessage("SymbolsWidget: Stopping existing LSP client");
+            m_lspClient->stop();
+            m_lspClient.reset();
+        }
+        
         m_lspClient = std::make_unique<LspClient>();
         
-        // Set up log callback to see what's happening
+        // Set up log callback to see what's happening - show ALL messages now
         m_lspClient->setLogCallback([this](const std::string& message) {
-            if (message.find("Progress") != std::string::npos ||
-                message.find("Unhandled") != std::string::npos) {
-                wxTheApp->CallAfter([this, message]() {
-                    // Extract just the key part for status
-                    ShowStatus(wxString::FromUTF8(message.substr(0, 50)));
-                });
-            }
+            wxLogMessage("LSP: %s", wxString::FromUTF8(message));
+            wxTheApp->CallAfter([this, message]() {
+                // Show important messages in status (but not debug separator lines)
+                if ((message.find("Error") != std::string::npos ||
+                     message.find("error") != std::string::npos ||
+                     message.find("Failed") != std::string::npos ||
+                     message.find("[stderr]") != std::string::npos) &&
+                    message.find("===") == std::string::npos) {
+                    ShowStatus(wxString::FromUTF8(message.substr(0, 80)));
+                }
+            });
         });
         
-        // Apply SSH configuration if enabled
+        // Use stored remote mode flag for consistency
         auto& config = Config::Instance();
-        bool sshEnabled = config.GetBool("ssh.enabled", false);
+        m_isRemoteMode = config.GetBool("ssh.enabled", false);
         wxString workspaceRoot = m_workspaceRoot;
         
-        if (sshEnabled) {
-            m_lspClient->setSshConfig(LoadLspSshConfig());
-            // Use remote path as workspace root
-            workspaceRoot = config.GetString("ssh.remotePath", "~");
+        wxLogMessage("SymbolsWidget: Remote mode: %s", m_isRemoteMode ? "YES" : "NO");
+        wxLogMessage("SymbolsWidget: Workspace root: %s", m_workspaceRoot);
+        
+        if (m_isRemoteMode) {
+            LspSshConfig lspSsh = LoadLspSshConfig();
+            wxLogMessage("SymbolsWidget: SSH config - enabled: %d, host: %s, user: %s, remoteCommand: %s",
+                lspSsh.enabled, 
+                wxString::FromUTF8(lspSsh.host),
+                wxString::FromUTF8(lspSsh.user),
+                wxString::FromUTF8(lspSsh.remoteCommand));
+            
+            if (!lspSsh.isValid()) {
+                ShowStatus("Invalid SSH configuration");
+                wxLogMessage("SymbolsWidget: SSH enabled but config is invalid");
+                m_isInitializing = false;
+                return;
+            }
+            m_lspClient->setSshConfig(lspSsh);
+            wxLogMessage("SymbolsWidget: SSH config applied to LSP client");
+        } else {
+            wxLogMessage("SymbolsWidget: Using local mode with workspace: %s", m_workspaceRoot);
         }
         
         // Try to find clangd in order of preference:
@@ -361,29 +492,43 @@ private:
         // 2. In PATH (for nix develop or system install)
         // 3. Via nix run (for standalone execution)
         wxString clangdCommand = FindClangdCommand();
+        wxLogMessage("SymbolsWidget: FindClangdCommand returned: '%s'", clangdCommand);
         
         if (clangdCommand.IsEmpty()) {
-            ShowStatus("clangd not found");
+            ShowStatus("clangd not found - install LLVM or configure lsp.clangd.path");
+            wxLogMessage("SymbolsWidget: Could not find clangd command");
+            m_isInitializing = false;
             return;
         }
         
-        wxString statusMsg = sshEnabled 
+        wxString statusMsg = m_isRemoteMode 
             ? "Starting remote clangd..." 
             : "Starting clangd...";
         ShowStatus(statusMsg);
         
-        if (!m_lspClient->start(std::string(clangdCommand.mb_str()), std::string(workspaceRoot.mb_str()))) {
-            ShowStatus(sshEnabled ? "Failed to start remote clangd" : "Failed to start clangd");
+        wxLogMessage("SymbolsWidget: Calling m_lspClient->start('%s', '%s')", 
+            clangdCommand, m_workspaceRoot);
+        
+        if (!m_lspClient->start(std::string(clangdCommand.mb_str()), std::string(m_workspaceRoot.mb_str()))) {
+            ShowStatus(m_isRemoteMode ? "Failed to start remote clangd" : "Failed to start clangd");
+            wxLogMessage("SymbolsWidget: m_lspClient->start() returned false!");
+            m_isInitializing = false;
             return;
         }
         
+        wxLogMessage("SymbolsWidget: LSP client started, calling initialize()");
+        
         m_lspClient->initialize([this](bool success) {
+            wxLogMessage("SymbolsWidget: Initialize callback - success: %d", success);
             wxTheApp->CallAfter([this, success]() {
+                m_isInitializing = false;  // Reset guard now that initialization is done
                 if (success) {
                     ShowStatus("LSP ready, scanning...");
+                    wxLogMessage("SymbolsWidget: LSP initialized successfully, starting indexing");
                     StartIndexing();
                 } else {
-                    ShowStatus("LSP init failed");
+                    ShowStatus("LSP init failed - check logs");
+                    wxLogMessage("SymbolsWidget: LSP initialization failed!");
                 }
             });
         });
@@ -429,6 +574,24 @@ private:
     }
     
     /**
+     * Stop any ongoing indexing operation.
+     */
+    void StopIndexing() {
+        // Cancel current request if pending
+        if (m_currentRequestCompleted) {
+            m_currentRequestCompleted->store(true);
+        }
+        
+        // Stop timeout timer
+        if (m_indexTimeoutTimer && m_indexTimeoutTimer->IsRunning()) {
+            m_indexTimeoutTimer->Stop();
+        }
+        
+        m_indexingComplete = true;  // Prevent further indexing
+        ShowStatus("Indexing stopped");
+    }
+    
+    /**
      * Start indexing the workspace.
      */
     void StartIndexing() {
@@ -438,8 +601,14 @@ private:
         m_currentIndexFile = 0;
         m_indexingComplete = false;
         
-        // Scan for source files
-        ScanDirectory(m_workspaceRoot);
+        // Scan for source files (supports both local and remote)
+        ShowStatus(m_isRemoteMode ? "Scanning remote files..." : "Scanning files...");
+        
+        if (m_isRemoteMode) {
+            ScanDirectoryRemote(m_workspaceRoot);
+        } else {
+            ScanDirectoryLocal(m_workspaceRoot);
+        }
         
         if (m_filesToIndex.empty()) {
             ShowStatus("No source files found");
@@ -454,9 +623,9 @@ private:
     }
     
     /**
-     * Recursively scan directory for source files.
+     * Recursively scan local directory for source files.
      */
-    void ScanDirectory(const wxString& dirPath) {
+    void ScanDirectoryLocal(const wxString& dirPath) {
         wxDir dir(dirPath);
         if (!dir.IsOpened()) return;
         
@@ -476,17 +645,129 @@ private:
         // Scan subdirectories (skip hidden and common non-source dirs)
         cont = dir.GetFirst(&filename, wxEmptyString, wxDIR_DIRS);
         while (cont) {
-            if (!filename.StartsWith(".") && 
-                filename != "node_modules" && 
-                filename != "build" && 
-                filename != "target" &&
-                filename != "__pycache__" &&
-                filename != "venv" &&
-                filename != ".git") {
+            if (ShouldScanDirectory(filename)) {
                 wxString subDir = wxFileName(dirPath, filename).GetFullPath();
-                ScanDirectory(subDir);
+                ScanDirectoryLocal(subDir);
             }
             cont = dir.GetNext(&filename);
+        }
+    }
+    
+    /**
+     * Recursively scan remote directory for source files via SSH.
+     */
+    void ScanDirectoryRemote(const wxString& dirPath, int depth = 0) {
+        // Limit recursion depth to avoid very deep scans
+        if (depth > 10) {
+            wxLogMessage("SymbolsWidget: Max scan depth reached at %s", dirPath);
+            return;
+        }
+        
+        auto sshConfig = FS::SshConfig::LoadFromConfig();
+        if (!sshConfig.isValid()) {
+            wxLogMessage("SymbolsWidget: Invalid SSH config for remote scanning");
+            return;
+        }
+        
+        // Use find command for efficient remote scanning
+        // This is much faster than recursive ls for large directories
+        std::string sshPrefix = sshConfig.buildSshPrefix();
+        std::string escapedPath = dirPath.ToStdString();
+        
+        // Build find command to get files and directories
+        // Exclude common non-source directories and hidden files
+        std::string cmd = sshPrefix + " \"find '" + escapedPath + "' -maxdepth 1 \\( -type f -o -type d \\) 2>/dev/null\" 2>&1";
+        
+        FILE* pipe = popen(cmd.c_str(), "r");
+        if (!pipe) {
+            wxLogMessage("SymbolsWidget: Failed to execute SSH find command");
+            return;
+        }
+        
+        std::vector<std::string> files;
+        std::vector<std::string> directories;
+        
+        char buffer[4096];
+        while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+            std::string line(buffer);
+            // Remove trailing newline
+            while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) {
+                line.pop_back();
+            }
+            
+            if (line.empty() || line == dirPath.ToStdString()) continue;
+            
+            // Get just the filename
+            std::string filename = line;
+            size_t lastSlash = line.rfind('/');
+            if (lastSlash != std::string::npos) {
+                filename = line.substr(lastSlash + 1);
+            }
+            
+            // Skip hidden files/directories
+            if (!filename.empty() && filename[0] == '.') continue;
+            
+            // Check if it's a file or directory by testing extension
+            wxString ext = wxString(filename).AfterLast('.').Lower();
+            if (m_sourceExtensions.count(ext)) {
+                files.push_back(line);
+            } else if (filename.find('.') == std::string::npos || ext.length() > 10) {
+                // Likely a directory (no extension or very long "extension")
+                // We'll verify with stat below
+                directories.push_back(line);
+            }
+        }
+        pclose(pipe);
+        
+        // Add source files
+        for (const auto& file : files) {
+            m_filesToIndex.push_back(file);
+        }
+        
+        // Recursively scan subdirectories
+        for (const auto& dir : directories) {
+            wxString dirName = wxString(dir).AfterLast('/');
+            if (ShouldScanDirectory(dirName)) {
+                // Verify it's actually a directory via SSH
+                std::string testCmd = sshPrefix + " \"test -d '" + dir + "' && echo yes\" 2>/dev/null";
+                FILE* testPipe = popen(testCmd.c_str(), "r");
+                if (testPipe) {
+                    char testBuf[16];
+                    bool isDir = (fgets(testBuf, sizeof(testBuf), testPipe) != nullptr);
+                    pclose(testPipe);
+                    if (isDir) {
+                        ScanDirectoryRemote(wxString(dir), depth + 1);
+                    }
+                }
+            }
+        }
+    }
+    
+    /**
+     * Check if a directory should be scanned (not excluded).
+     */
+    bool ShouldScanDirectory(const wxString& dirname) const {
+        return !dirname.StartsWith(".") && 
+               dirname != "node_modules" && 
+               dirname != "build" && 
+               dirname != "target" &&
+               dirname != "__pycache__" &&
+               dirname != "venv" &&
+               dirname != ".git" &&
+               dirname != "dist" &&
+               dirname != ".cache";
+    }
+    
+    /**
+     * Recursively scan directory for source files.
+     * @deprecated Use ScanDirectoryLocal or ScanDirectoryRemote instead.
+     */
+    void ScanDirectory(const wxString& dirPath) {
+        // For backward compatibility, delegate to appropriate method
+        if (m_isRemoteMode) {
+            ScanDirectoryRemote(dirPath);
+        } else {
+            ScanDirectoryLocal(dirPath);
         }
     }
     
@@ -503,25 +784,39 @@ private:
             return;
         }
         
+        // Check if we've been told to stop
+        if (m_indexingComplete) {
+            return;
+        }
+        
         wxString filePath = m_filesToIndex[m_currentIndexFile];
         wxString uri = pathToUri(std::string(filePath.mb_str()));
         
         // Update status
-        wxString fileName = wxFileName(filePath).GetFullName();
+        wxString fileName = filePath.AfterLast('/');
+        if (fileName.IsEmpty()) fileName = filePath.AfterLast('\\');
+        if (fileName.IsEmpty()) fileName = filePath;
+        
         ShowStatus(wxString::Format("Indexing %zu/%zu: %s", 
             m_currentIndexFile + 1, m_filesToIndex.size(), fileName));
         
-        // Read file content
-        wxFile file(filePath);
-        if (!file.IsOpened()) {
-            m_currentIndexFile++;
-            IndexNextFile();
-            return;
+        // Read file content (local or remote)
+        wxString content;
+        bool readSuccess = false;
+        
+        if (m_isRemoteMode) {
+            readSuccess = ReadRemoteFile(filePath, content);
+        } else {
+            readSuccess = ReadLocalFile(filePath, content);
         }
         
-        wxString content;
-        file.ReadAll(&content);
-        file.Close();
+        if (!readSuccess || content.IsEmpty()) {
+            wxLogMessage("SymbolsWidget: Failed to read file %s, skipping", filePath);
+            m_currentIndexFile++;
+            // Use CallAfter to prevent stack overflow on many failures
+            wxTheApp->CallAfter([this]() { IndexNextFile(); });
+            return;
+        }
         
         // Notify LSP about the file
         wxString langId = DetectLanguage(filePath);
@@ -670,6 +965,58 @@ private:
     }
     
     /**
+     * Read a local file's content.
+     */
+    bool ReadLocalFile(const wxString& filePath, wxString& content) {
+        wxFile file(filePath);
+        if (!file.IsOpened()) {
+            return false;
+        }
+        
+        bool success = file.ReadAll(&content);
+        file.Close();
+        return success && !content.IsEmpty();
+    }
+    
+    /**
+     * Read a remote file's content via SSH.
+     */
+    bool ReadRemoteFile(const wxString& filePath, wxString& content) {
+        auto sshConfig = FS::SshConfig::LoadFromConfig();
+        if (!sshConfig.isValid()) {
+            wxLogMessage("SymbolsWidget: Invalid SSH config for reading remote file");
+            return false;
+        }
+        
+        std::string sshPrefix = sshConfig.buildSshPrefix();
+        std::string escapedPath = filePath.ToStdString();
+        
+        // Use cat to read file content
+        std::string cmd = sshPrefix + " \"cat '" + escapedPath + "'\" 2>/dev/null";
+        
+        FILE* pipe = popen(cmd.c_str(), "r");
+        if (!pipe) {
+            wxLogMessage("SymbolsWidget: Failed to execute SSH cat command for %s", filePath);
+            return false;
+        }
+        
+        std::string result;
+        char buffer[4096];
+        while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+            result += buffer;
+        }
+        
+        int status = pclose(pipe);
+        if (status != 0) {
+            wxLogMessage("SymbolsWidget: SSH cat command failed with status %d for %s", status, filePath);
+            return false;
+        }
+        
+        content = wxString::FromUTF8(result.c_str());
+        return !content.IsEmpty();
+    }
+    
+    /**
      * Show status message.
      */
     void ShowStatus(const wxString& message) {
@@ -717,7 +1064,13 @@ private:
         // Open file if not already open
         wxString filePath = data->GetFilePath();
         if (editor->GetFilePath() != filePath) {
-            editor->OpenFile(filePath);
+            // Use remote or local file opening based on mode
+            if (m_isRemoteMode) {
+                auto sshConfig = FS::SshConfig::LoadFromConfig();
+                editor->OpenRemoteFile(filePath, sshConfig.buildSshPrefix());
+            } else {
+                editor->OpenFile(filePath);
+            }
         }
         
         // Navigate to symbol position if it's a symbol (not just a file)

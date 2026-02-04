@@ -8,6 +8,10 @@
 class ByteMuseApp : public wxApp {
 public:
     bool OnInit() override {
+        // Suppress the default wxLogGui popup dialogs IMMEDIATELY
+        // This prevents any early logs from showing as popups
+        wxLog::EnableLogging(false);
+        
         // Initialize image handlers for loading PNG, JPEG, etc.
         wxInitAllImageHandlers();
         
@@ -18,18 +22,22 @@ public:
         ThemeManager::Instance().Initialize();
         
         auto frame = new MainFrame();
-        frame->Show();
         
-        // Create log window (hidden by default)
+        // Create log window - all logs go here, not to popups
         // Parameters: parent, title, show, passToOld
-        // passToOld=true keeps stderr output as well (useful during development)
-        m_logWindow = new wxLogWindow(frame, "Debug Log", false, true);
+        // passToOld=false prevents logs from going to default wxLogGui (which shows popups)
+        m_logWindow = new wxLogWindow(frame, "Debug Log", false, false);
+        
+        // Now that log window is set up, re-enable logging
+        wxLog::EnableLogging(true);
         
         // Enable verbose logging so wxLogDebug messages are shown
-        wxLog::SetVerbose(false);
+        wxLog::SetVerbose(true);
         
         // Set log level to include debug messages
-        wxLog::SetLogLevel(wxLOG_Error);
+        wxLog::SetLogLevel(wxLOG_Debug);
+        
+        frame->Show();
         
         return true;
     }
