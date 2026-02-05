@@ -420,12 +420,26 @@ public:
         
         std::string description = "You have access to the user's workspace through several tools:\n\n";
         
+        // Track which provider categories are enabled for contextual guidance
+        bool hasJira = false;
+        bool hasFilesystem = false;
+        bool hasTerminal = false;
+        bool hasCodeIndex = false;
+        
         for (const auto& provider : providers) {
             auto tools = provider->getTools();
             if (tools.empty()) continue;
             
+            std::string providerName = provider->getName();
+            
+            // Track enabled categories
+            if (providerName == "Jira") hasJira = true;
+            else if (providerName == "Filesystem") hasFilesystem = true;
+            else if (providerName == "Terminal") hasTerminal = true;
+            else if (providerName == "Code Index") hasCodeIndex = true;
+            
             // Provider header
-            description += provider->getName() + " TOOLS:\n";
+            description += providerName + " TOOLS:\n";
             
             // List each tool
             for (const auto& tool : tools) {
@@ -442,9 +456,36 @@ public:
             }
         }
         
-        description += "\nWhen the user asks about their code, project structure, or file contents, "
-                      "USE THESE TOOLS to read and explore their files. Don't say you can't access files - you can! "
-                      "When the user asks you to run commands, build code, or execute scripts, use the terminal tools.";
+        // Add usage guidelines
+        description += "\n## TOOL USAGE GUIDELINES\n\n";
+        
+        if (hasFilesystem || hasCodeIndex) {
+            description += "**Code & Files:** When the user asks about their code, project structure, or file contents, "
+                          "USE THESE TOOLS to read and explore their files. Don't say you can't access files - you can!\n\n";
+        }
+        
+        if (hasTerminal) {
+            description += "**Terminal:** When the user asks you to run commands, build code, or execute scripts, "
+                          "use the terminal tools.\n\n";
+        }
+        
+        if (hasJira) {
+            description += "**Jira:** IMPORTANT - When the user mentions ANY of the following, USE JIRA TOOLS:\n"
+                          "- Issue keys/IDs (e.g., 'PROJ-123', 'ABC-456', any pattern like LETTERS-NUMBERS)\n"
+                          "- 'my issues', 'my tasks', 'assigned to me', 'my tickets'\n"
+                          "- 'jira', 'ticket', 'issue', 'story', 'bug', 'epic', 'sprint'\n"
+                          "- 'what am I working on', 'what should I work on'\n"
+                          "- 'create a ticket/issue/task', 'log a bug'\n"
+                          "- 'move to', 'transition', 'change status', 'mark as done/complete'\n"
+                          "- 'add a comment', 'update the ticket'\n"
+                          "- Project references that could be Jira projects\n\n"
+                          "When you see an issue key pattern (PROJ-123), ALWAYS use jira_get_issue to fetch details. "
+                          "For 'my issues' requests, use jira_get_my_issues. "
+                          "Before transitioning an issue, use jira_get_transitions to get valid transition IDs.\n\n";
+        }
+        
+        description += "**General:** Always prefer using tools over asking the user to do something themselves. "
+                      "If a tool can answer the question or perform the action, use it.";
         
         return description;
     }
