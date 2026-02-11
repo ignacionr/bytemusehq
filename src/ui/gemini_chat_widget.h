@@ -1185,8 +1185,15 @@ private:
         }
         MCP::Registry::Instance().registerProvider(m_terminalProvider);
         
-        // Create code index provider (will be connected to SymbolsWidget later)
-        m_codeIndexProvider = std::make_shared<MCP::CodeIndexProvider>();
+        // Reuse existing code index provider if already registered (may have callbacks set from SymbolsWidget)
+        // Otherwise create a new one
+        m_codeIndexProvider = std::dynamic_pointer_cast<MCP::CodeIndexProvider>(
+            MCP::Registry::Instance().getProvider("mcp.codeindex"));
+        if (!m_codeIndexProvider) {
+            m_codeIndexProvider = std::make_shared<MCP::CodeIndexProvider>();
+            MCP::Registry::Instance().registerProvider(m_codeIndexProvider);
+        }
+        // Apply SSH config if enabled (may update existing provider)
         if (sshEnabled) {
             MCP::CodeIndexSshConfig codeIndexSsh;
             codeIndexSsh.enabled = true;
@@ -1194,7 +1201,6 @@ private:
             codeIndexSsh.remotePath = workDir;
             m_codeIndexProvider->setSshConfig(codeIndexSsh);
         }
-        MCP::Registry::Instance().registerProvider(m_codeIndexProvider);
         
         // Create Jira provider (always register, isEnabled() will gate based on config)
         m_jiraProvider = std::make_shared<MCP::JiraProvider>();
