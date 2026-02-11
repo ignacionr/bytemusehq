@@ -570,6 +570,30 @@ private:
             return configured;
         }
         
+        // Handle Remote Mode
+        if (m_isRemoteMode) {
+            auto sshConfig = FS::SshConfig::LoadFromConfig();
+            if (sshConfig.isValid()) {
+                wxString sshPrefix = wxString::FromUTF8(sshConfig.buildSshPrefix());
+                wxArrayString output, errors;
+                
+                // 2. Check if clangd is in remote PATH
+                wxString cmd = sshPrefix + " \"which clangd\"";
+                if (wxExecute(cmd, output, errors, wxEXEC_SYNC | wxEXEC_NODISABLE) == 0) {
+                    return "clangd";
+                }
+                
+                // 3. Try remote nix run
+                cmd = sshPrefix + " \"which nix\"";
+                if (wxExecute(cmd, output, errors, wxEXEC_SYNC | wxEXEC_NODISABLE) == 0) {
+                    return "nix run nixpkgs#clang-tools -- clangd";
+                }
+            }
+            return wxEmptyString;
+        }
+        
+        // Local Mode Logic
+        
         // 2. Check if clangd is in PATH
         wxArrayString output, errors;
         if (wxExecute("which clangd", output, errors, wxEXEC_SYNC) == 0 && !output.IsEmpty()) {
