@@ -9,6 +9,19 @@ if(WIN32)
   set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 endif()
 
+# Extract version from flake.nix
+file(READ "${CMAKE_SOURCE_DIR}/flake.nix" FLAKE_CONTENT)
+string(REGEX MATCH "version *= *\"([0-9]+\\.[0-9]+\\.[0-9]+)\"" _MATCH "${FLAKE_CONTENT}")
+if(CMAKE_MATCH_1)
+    set(APP_VERSION "${CMAKE_MATCH_1}")
+else()
+    set(APP_VERSION "0.0.0")
+    message(WARNING "Could not extract version from flake.nix")
+endif()
+
+message(STATUS "Configuring ByteMuseHQ version ${APP_VERSION}")
+add_compile_definitions(APP_VERSION="${APP_VERSION}")
+
 # Find wxWidgets with static linking
 set(wxWidgets_USE_STATIC ON)
 find_package(wxWidgets REQUIRED core base stc)

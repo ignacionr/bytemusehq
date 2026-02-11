@@ -4,6 +4,7 @@
 #include "command.h"
 #include "command_registry.h"
 #include <wx/aboutdlg.h>
+#include <wx/msgdlg.h>
 #include <wx/log.h>
 
 namespace AppCommands {
@@ -37,12 +38,21 @@ inline void Register() {
     ));
 
     registry.Register(makeCommand(
+        "app.version", "Show Version", "Help", "",
+        "Show current application version",
+        [](CommandContext& ctx) {
+            wxMessageBox(wxString::Format("ByteMuseHQ version %s", APP_VERSION),
+                         "Version", wxOK | wxICON_INFORMATION);
+        }
+    ));
+
+    registry.Register(makeCommand(
         "app.about", "About ByteMuseHQ", "Help", "",
         "Show information about this application",
         [](CommandContext& ctx) {
             wxAboutDialogInfo info;
             info.SetName("ByteMuseHQ");
-            info.SetVersion("1.0.0");
+            info.SetVersion(APP_VERSION);
             info.SetDescription("A lightweight code editor built with wxWidgets.");
             info.SetCopyright("(C) 2024-2026 ByteMuse");
             wxAboutBox(info);
