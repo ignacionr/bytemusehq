@@ -578,14 +578,24 @@ private:
                 wxArrayString output, errors;
                 
                 // 2. Check if clangd is in remote PATH
+                // Must check output is non-empty: SSH may return 0 even if the
+                // remote command fails (exit code is not always propagated)
                 wxString cmd = sshPrefix + " \"which clangd\"";
-                if (wxExecute(cmd, output, errors, wxEXEC_SYNC | wxEXEC_NODISABLE) == 0) {
+                wxLogMessage("SymbolsWidget: Remote clangd check: %s", cmd);
+                long rc = wxExecute(cmd, output, errors, wxEXEC_SYNC | wxEXEC_NODISABLE);
+                wxLogMessage("SymbolsWidget: Remote 'which clangd' rc=%ld, output=%zu lines", rc, output.GetCount());
+                if (rc == 0 && !output.IsEmpty() && !output[0].IsEmpty()) {
                     return "clangd";
                 }
                 
                 // 3. Try remote nix run
+                output.Clear();
+                errors.Clear();
                 cmd = sshPrefix + " \"which nix\"";
-                if (wxExecute(cmd, output, errors, wxEXEC_SYNC | wxEXEC_NODISABLE) == 0) {
+                wxLogMessage("SymbolsWidget: Remote nix check: %s", cmd);
+                rc = wxExecute(cmd, output, errors, wxEXEC_SYNC | wxEXEC_NODISABLE);
+                wxLogMessage("SymbolsWidget: Remote 'which nix' rc=%ld, output=%zu lines", rc, output.GetCount());
+                if (rc == 0 && !output.IsEmpty() && !output[0].IsEmpty()) {
                     return "nix run nixpkgs#clang-tools -- clangd";
                 }
             }
