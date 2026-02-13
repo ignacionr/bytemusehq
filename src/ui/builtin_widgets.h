@@ -21,6 +21,7 @@
 #include "terminal_widget.h"
 #include "timer_widget.h"
 #include "jira_widget.h"
+#include "github_projects_widget.h"
 #include "gemini_chat_widget.h"
 #include "symbols_widget.h"
 
@@ -56,6 +57,10 @@ inline void RegisterAll() {
     
     registry.Register("core.jira", []() -> WidgetPtr {
         return std::make_shared<JiraWidget>();
+    });
+    
+    registry.Register("core.githubProjects", []() -> WidgetPtr {
+        return std::make_shared<GitHubProjectsWidget>();
     });
     
     registry.Register("core.geminiChat", []() -> WidgetPtr {

@@ -12,6 +12,7 @@
 #include "../mcp/mcp_terminal.h"
 #include "../mcp/mcp_code_index.h"
 #include "../mcp/mcp_jira.h"
+#include "../mcp/mcp_github_projects.h"
 #include <wx/dcbuffer.h>
 #include <wx/timer.h>
 #include <wx/textctrl.h>
@@ -1108,6 +1109,7 @@ private:
     std::shared_ptr<MCP::TerminalProvider> m_terminalProvider;
     std::shared_ptr<MCP::CodeIndexProvider> m_codeIndexProvider;
     std::shared_ptr<MCP::JiraProvider> m_jiraProvider;
+    std::shared_ptr<MCP::GitHubProjectsProvider> m_githubProjectsProvider;
     
     // Thread-safe response queue
     std::mutex m_responseMutex;
@@ -1208,6 +1210,13 @@ private:
                    m_jiraProvider->isConfigured() ? "yes" : "no",
                    m_jiraProvider->isEnabled() ? "yes" : "no");
         MCP::Registry::Instance().registerProvider(m_jiraProvider);
+        
+        // Create GitHub Projects provider (always register, isEnabled() gates on config)
+        m_githubProjectsProvider = std::make_shared<MCP::GitHubProjectsProvider>();
+        wxLogDebug("MCP: GitHub Projects provider created, isConfigured=%s, isEnabled=%s",
+                   m_githubProjectsProvider->isConfigured() ? "yes" : "no",
+                   m_githubProjectsProvider->isEnabled() ? "yes" : "no");
+        MCP::Registry::Instance().registerProvider(m_githubProjectsProvider);
         
         // Enable MCP in Gemini client
         AI::GeminiClient::Instance().SetMCPEnabled(true);

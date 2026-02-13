@@ -422,6 +422,7 @@ public:
         
         // Track which provider categories are enabled for contextual guidance
         bool hasJira = false;
+        bool hasGitHubProjects = false;
         bool hasFilesystem = false;
         bool hasTerminal = false;
         bool hasCodeIndex = false;
@@ -434,6 +435,7 @@ public:
             
             // Track enabled categories
             if (providerName == "Jira") hasJira = true;
+            else if (providerName == "GitHub Projects") hasGitHubProjects = true;
             else if (providerName == "Filesystem") hasFilesystem = true;
             else if (providerName == "Terminal") hasTerminal = true;
             else if (providerName == "Code Index") hasCodeIndex = true;
@@ -482,6 +484,20 @@ public:
                           "When you see an issue key pattern (PROJ-123), ALWAYS use jira_get_issue to fetch details. "
                           "For 'my issues' requests, use jira_get_my_issues. "
                           "Before transitioning an issue, use jira_get_transitions to get valid transition IDs.\n\n";
+        }
+        
+        if (hasGitHubProjects) {
+            description += "**GitHub Projects:** IMPORTANT - When the user mentions ANY of the following, USE GITHUB PROJECTS TOOLS:\n"
+                          "- Issue references (e.g., 'owner/repo#123', '#456')\n"
+                          "- 'my items', 'my tasks', 'assigned to me', 'my issues'\n"
+                          "- 'github', 'project board', 'project items', 'draft issue'\n"
+                          "- 'what am I working on', 'what should I work on'\n"
+                          "- 'create a draft', 'new item', 'add to project'\n"
+                          "- 'change status', 'move to', 'mark as done'\n"
+                          "- 'add a comment', 'comment on issue'\n\n"
+                          "When you see an issue reference (owner/repo#123), use github_get_issue to fetch details. "
+                          "For 'my items' requests, use github_get_my_items. "
+                          "Before changing status, use github_get_status_options to get valid option IDs.\n\n";
         }
         
         description += "**General:** Always prefer using tools over asking the user to do something themselves. "
